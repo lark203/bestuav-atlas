@@ -21,7 +21,7 @@ func (a *App) projectPage(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Gap(kit.PageGap).Children(func() {
 		a.atlasBanner(c, t, d)
 
-		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Column(c).Gap(4).Grow(1).Children(func() {
 				ui.Text(c, "项目是仓库与待办的归属单位").
 					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
@@ -36,7 +36,9 @@ func (a *App) projectPage(c *ui.Context, t *ui.Theme) {
 			return
 		}
 
-		kit.RowGrid(c, 3, func() {
+		// 3 / 2 / 1 列随窗口宽度自适应：项目卡里有名称、描述、仓库名与三个按钮，
+		// 硬塞 3 列时窄窗口会把按钮挤出去。
+		kit.RowGrid(c, a.columnsFor(c, 260, 3), func() {
 			for _, p := range d.projects {
 				a.projectCard(c, t, p)
 			}

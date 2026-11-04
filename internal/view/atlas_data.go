@@ -665,11 +665,25 @@ func (a *App) repoLocalPath(name string) string {
 	return filepath.Join(a.workRoot(), repoSafeDir(name))
 }
 
-// repoSafeDir 把 owner/repo 变成可以当目录名的形式。
+// repoSafeDir 取仓库名本身当目录名：`lark203/bestuav-atlas` → `bestuav-atlas`。
+//
+// 刻意不拼 owner：用户要的是「仓库名是什么，目录就是什么」，本地目录不该因为
+// 换了账号名（fork / 迁移）而变。代价是不同 owner 下的同名仓库会落到同一个
+// 目录——这是用户明确选择的命名规则；导入时仍以「仓库全名」去重，不会互相
+// 覆盖登记，克隆时目录已有内容则沿用（见 cloneOne）。
 func repoSafeDir(name string) string {
-	s := strings.ReplaceAll(name, "/", "-")
-	s = strings.ReplaceAll(s, "\\", "-")
-	return strings.TrimSpace(s)
+	s := strings.TrimSpace(name)
+	s = strings.TrimSuffix(s, ".git")
+	s = strings.ReplaceAll(s, "\\", "/")
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.TrimSpace(s)
+	// 防住空名 / `.` / `..` 这种会把路径指到根目录或父目录的极端输入。
+	if s == "" || s == "." || s == ".." {
+		return "repo"
+	}
+	return s
 }
 
 // ---- 小工具 ----

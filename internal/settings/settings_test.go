@@ -37,6 +37,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	s.BackgroundImage = filepath.Join("tmp", "wall.png")
 	s.MenuOpacity = 0.5
 	s.ContentOpacity = 0.7
+	s.AsyncConcurrency = 6
 	if err := s.Save(); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
@@ -49,7 +50,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		got.FontSize != 16 || got.CloseMode != "minimize" ||
 		!got.SidebarCollapsed || !got.AllowMultiInstance ||
 		got.BackgroundImage != s.BackgroundImage ||
-		got.MenuOpacity != 0.5 || got.ContentOpacity != 0.7 {
+		got.MenuOpacity != 0.5 || got.ContentOpacity != 0.7 ||
+		got.AsyncConcurrency != 6 {
 		t.Fatalf("读取结果与写入不一致: %+v", got)
 	}
 }
@@ -89,6 +91,7 @@ func TestNormalizeBadValues(t *testing.T) {
 		"closeMode":          "explode",
 		"menuOpacity":        0,   // 老文件没有该字段 → 0，应回落默认
 		"contentOpacity":     9.9, // 越界
+		"asyncConcurrency":   99,  // 越界
 		"petSkin":            "dragon",
 		"petReminderMinutes": 999,
 		"petXP":              -3,
@@ -126,6 +129,9 @@ func TestNormalizeBadValues(t *testing.T) {
 	}
 	if s.MenuOpacity != DefaultMenuOpacity || s.ContentOpacity != DefaultContentOpacity {
 		t.Errorf("不透明度未回落到默认: %v / %v", s.MenuOpacity, s.ContentOpacity)
+	}
+	if s.AsyncConcurrency != DefaultAsyncConcurrency {
+		t.Errorf("异步并发未回落到默认: %d", s.AsyncConcurrency)
 	}
 }
 

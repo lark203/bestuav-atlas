@@ -61,8 +61,26 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 					ui.Segmented(c, &a.paletteIdx, paletteLabels()...)
 				})
 				// 色调 = 背景与控件面：不影响强调色，可和配色自由组合。
+				// 九个色调在窄窗口里塞不进一行 Segmented（它会直接裁掉后半段），
+				// 这时换成可换行的按钮组：宽度不够就自动换行，没有隐藏项。
 				settingRow(c, t, "色调", func() {
-					ui.Segmented(c, &a.toneIdx, toneLabels()...)
+					if a.contentWidth(c) >= 760 {
+						ui.Segmented(c, &a.toneIdx, toneLabels()...)
+						return
+					}
+					ui.Row(c).Gap(6).Wrap().Children(func() {
+						for i, label := range toneLabels() {
+							var b ui.Element
+							if i == a.toneIdx {
+								b = ui.PrimaryButton(c, label).Padding(2, 8)
+							} else {
+								b = ui.Button(c, label).Padding(2, 8)
+							}
+							if b.Clicked() {
+								a.toneIdx = i
+							}
+						}
+					})
 				})
 				settingRow(c, t, "字体大小", func() {
 					ui.Slider(c, &a.fontSize, 11, 20).Width(220)
@@ -126,6 +144,33 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 					ui.Text(c, hint).TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 				})
 				ui.Text(c, "「不缓存」的页面（如生成 license）离开即销毁，不受此项影响。").
+					TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+			})
+
+			// ===== 异步任务 =====
+			// 一次最多同时跑几个后台任务。作用范围是「一批仓库操作」：
+			// 导入后克隆、批量拉取/提交推送/刷新远端、全量状态探测。
+			kit.Section(c, t, "异步任务", func() {
+				settingRow(c, t, "最大并发", func() {
+					// 绑定 App 上的 float64 镜像：Stepper 在构建之后才写值，
+					// 用局部变量会在下一帧被 settings 的旧值覆盖回去。
+					ui.Stepper(c, &a.asyncWorkers, 1, float64(settings.MaxAsyncConcurrency), 1)
+					got := int(math.Round(a.asyncWorkers))
+					if got < 1 {
+						got = 1
+					}
+					if got > settings.MaxAsyncConcurrency {
+						got = settings.MaxAsyncConcurrency
+					}
+					if got != a.settings.AsyncConcurrency {
+						a.settings.AsyncConcurrency = got
+						a.persist()
+					}
+					ui.Text(c, fmt.Sprintf("同时最多 %d 个", got)).
+						TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+				})
+				ui.Text(c, "导入克隆、批量拉取 / 提交推送 / 刷新远端、状态探测共用这个上限："+
+					"同时启动这么多个，完成一个再补一个，直到整批结束。").
 					TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 			})
 

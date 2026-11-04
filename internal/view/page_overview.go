@@ -31,7 +31,7 @@ func (a *App) overviewPage(c *ui.Context, t *ui.Theme) {
 		a.atlasBanner(c, t, d)
 
 		// ---- 问候与全局入口 ----
-		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.End).Children(func() {
+		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.End).Wrap().Children(func() {
 			ui.Column(c).Gap(6).Grow(1).Children(func() {
 				ui.Text(c, greeting()+"，"+appmeta.Title).FontSize(24).Bold()
 				ui.Text(c, overviewSubtitle(today, dueToday, overdue)).
@@ -64,11 +64,22 @@ func (a *App) overviewPage(c *ui.Context, t *ui.Theme) {
 		}
 
 		// ---- 待办 + 仓库两栏 ----
-		// Stretch：两栏卡片拉到同高；否则 Row 默认垂直居中，短的那张会浮在中间。
-		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Stretch).Children(func() {
-			ui.Column(c).Grow(2).Children(func() { a.overviewTodos(c, t) })
-			ui.Column(c).Grow(1).Children(func() { a.overviewRepos(c, t) })
-		})
+		// 用 Grid（2:1 轨道）而不是 Row + Grow：
+		//   - 同一行的卡片由 Grid 的默认 Stretch 拉到同高，高度永远一致；
+		//   - 两列宽度严格 2:1，不会因为哪边文字长就变宽。
+		// 内容区窄于 700 时改成上下堆叠：再按 2:1 分，右栏只剩两百出头，
+		// 仓库名与按钮会挤成一团。
+		if a.stacked(c, 700) {
+			ui.Column(c).Gap(kit.PageGap).Children(func() {
+				a.overviewTodos(c, t)
+				a.overviewRepos(c, t)
+			})
+		} else {
+			ui.Grid(c).ColumnTracks(ui.Fr(2), ui.Fr(1)).Gap(kit.RowGap).Children(func() {
+				a.overviewTodos(c, t)
+				a.overviewRepos(c, t)
+			})
+		}
 
 		// ---- 四象限 ----
 		a.quadrantsCard(c, t)
@@ -103,7 +114,7 @@ func (a *App) quadrantsCard(c *ui.Context, t *ui.Theme) {
 	kit.Card(c, t, func() {
 		kit.CardHeader(c, t, "四象限",
 			"重要 × 紧急。先做左上；右上（重要不紧急）是长期价值，别让它一直拖成左上。", nil)
-		kit.RowGrid(c, 2, func() {
+		kit.RowGrid(c, a.columnsFor(c, 300, 2), func() {
 			for i := range quadrantDefs {
 				a.quadrantCell(c, t, i, groups[i])
 			}
@@ -200,7 +211,7 @@ func (a *App) overviewTodos(c *ui.Context, t *ui.Theme) {
 				a.overviewTodoRow(c, t, td)
 			}
 		})
-	})
+	}).Label("总览·要做的")
 }
 
 // overviewTodoRow 首页的待办行：只保留勾选、标题、项目、截止日。
@@ -258,12 +269,12 @@ func (a *App) overviewRepos(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, "另有 "+itoa(n-6)+" 个，去仓库页处理。").
 				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 		}
-	})
+	}).Label("总览·仓库")
 }
 
 // overviewOnboarding 第一次打开时的三步引导（没有任何数据才出现）。
 func (a *App) overviewOnboarding(c *ui.Context, t *ui.Theme) {
-	kit.RowGrid(c, 3, func() {
+	kit.RowGrid(c, a.columnsFor(c, 240, 3), func() {
 		a.onboardStep(c, t, "01", "建一个项目",
 			"项目是仓库与待办的归属单位，先按「一件事」分组。",
 			"新建项目", func() { a.openProjectDialog(store.Project{}) })

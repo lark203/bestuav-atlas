@@ -108,6 +108,10 @@ type App struct {
 	pageIdle        float64
 	appliedPageIdle float64
 
+	// 后台异步任务的最大并发数。Stepper 绑定 float64，故与 settings 的 int
+	// 字段分列；设置页 detects 变化后写回 settings 并落盘。
+	asyncWorkers float64
+
 	// 多实例开关（保存后需重启生效：单实例锁在进程启动时获取）。
 	allowMultiInstance bool
 	appliedMulti       bool
@@ -309,6 +313,8 @@ func newApp(s *settings.Settings) *App {
 		// 页面缓存闲置销毁
 		pageIdle:        float64(s.PageIdleMinutes),
 		appliedPageIdle: float64(s.PageIdleMinutes),
+		// 后台异步任务最大并发（设置页写回 settings）
+		asyncWorkers: float64(s.AsyncConcurrency),
 		// 任务列表初始演示数据
 		tasks: demoTaskRows(),
 		// 表单初始值

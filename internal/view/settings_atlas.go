@@ -32,7 +32,7 @@ func (a *App) workspaceSection(c *ui.Context, t *ui.Theme) {
 			}
 		}
 	})
-	ui.Text(c, "导入仓库时默认放到「根目录/owner-repo」；留空则用上面的灰字路径。").
+	ui.Text(c, "导入仓库时默认放到「根目录/仓库名」（不拼用户名）；留空则用上面的灰字路径。").
 		TextColor(t.TextMuted).FontSize(t.FontSize-2).Margin(0, 0, 0, 4)
 
 	a.tokenRow(c, t, "GitHub 令牌", &a.settings.RepoToken, forgePlatforms[0],

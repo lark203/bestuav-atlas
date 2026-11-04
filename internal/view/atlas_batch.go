@@ -15,6 +15,7 @@ import (
 	"bestuav-atlas/internal/forge"
 	"bestuav-atlas/internal/gitx"
 	"bestuav-atlas/internal/logging"
+	"bestuav-atlas/internal/settings"
 	"bestuav-atlas/internal/store"
 )
 
@@ -66,6 +67,18 @@ func batchTimeout(k batchKind) time.Duration {
 	}
 }
 
+// asyncLimit 当前设置允许的后台并发数；越界值兜底到默认，避免脏配置把
+// 任务池开成 0（永远不开始）或几百（把机器打满）。
+//
+// 只在主线程、启动协程之前调用；协程里不要再读 a.settings。
+func (a *App) asyncLimit() int {
+	n := a.settings.AsyncConcurrency
+	if n < 1 || n > settings.MaxAsyncConcurrency {
+		return settings.DefaultAsyncConcurrency
+	}
+	return n
+}
+
 // tokenSet 是主线程读好的令牌快照。
 //
 // 为什么不在协程里直接读 a.settings：设置可能正被用户编辑（主线程写），
@@ -112,11 +125,15 @@ func (ts tokenSet) client(p forge.Platform) *forge.Client {
 	return forge.New(p, ts.tokenFor(p.Host))
 }
 
-// runRepoBatch 串行处理一批仓库。
+// runRepoBatch 用「有限并发的工作池」处理一批仓库。
 //
-// 为什么串行而不是并发：git 操作会争用同一个仓库的 index.lock，而且网络请求
-// 并发只会更快撞上 GitHub 限流；十个仓库串行也只要几秒到几十秒。串行还有个好处：
-// 进度条是「第几个 / 共几个」，用户能看懂。
+// 并发数来自设置里的「异步任务 → 最大并发」（默认 4，1–8 可调）。做法是
+// workers 个协程从同一个 jobs 通道取仓库：一个跑完立刻取下一个，直到这批
+// 全部完成——正好对应「20 个仓库一次最多克隆 3~5 个，完成一个再补一个」。
+//
+// 为什么不无限并发：git 操作会争用磁盘与网络，几十个 git 进程同时起只会更慢；
+// 为什么不再串行：克隆/拉取是纯 I/O，几个仓库并行能明显缩短总时间，而进度条
+// 仍按「已完成 / 总数」推进，用户看得懂。
 func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 	if a.store == nil {
 		a.toast("本次运行不落库，无法批量操作")
@@ -142,6 +159,7 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 		}
 	}
 
+	limit := a.asyncLimit()
 	label := fmt.Sprintf("%s（%d 个）", kind.label(), len(repos))
 	a.taskRunning = true
 	a.taskProgress = 0
@@ -153,28 +171,56 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 	go func() {
 		defer logging.Recover("atlas-batch")
 
-		ok, failed := 0, 0
+		workers := min(limit, len(repos))
+		// 缓冲队列一次装下整批任务：worker 一个跑完就取下一条。即使某个
+		// worker 内部 panic（下面 Recover 住），也不会让投递方永远阻塞。
+		jobs := make(chan int, len(repos))
+		for i := range repos {
+			jobs <- i
+		}
+		close(jobs)
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		ok, failed, done := 0, 0, 0
 		var firstErr string
-		for i, r := range repos {
-			ctx, cancel := context.WithTimeout(context.Background(), batchTimeout(kind))
-			err := a.batchOne(ctx, kind, r, commitMsg, tokens)
-			cancel()
-			if err != nil {
-				failed++
-				if firstErr == "" {
-					firstErr = r.Name + "：" + err.Error()
+
+		work := func() {
+			defer wg.Done()
+			defer logging.Recover("atlas-batch-worker")
+			for i := range jobs {
+				r := repos[i]
+				ctx, cancel := context.WithTimeout(context.Background(), batchTimeout(kind))
+				err := a.batchOne(ctx, kind, r, commitMsg, tokens)
+				cancel()
+
+				mu.Lock()
+				if err != nil {
+					failed++
+					if firstErr == "" {
+						firstErr = r.Name + "：" + err.Error()
+					}
+					logging.Errv("atlas", "批量操作单项失败", err, "repo", r.Name, "kind", kind.label())
+				} else {
+					ok++
 				}
-				logging.Errv("atlas", "批量操作单项失败", err, "repo", r.Name, "kind", kind.label())
-			} else {
-				ok++
+				done++
+				progress := float64(done) / float64(len(repos))
+				mu.Unlock()
+
+				mygo.RunOnMain(func() {
+					a.taskProgress = progress
+					a.requestFrame()
+				})
 			}
-			done := float64(i+1) / float64(len(repos))
-			mygo.RunOnMain(func() {
-				a.taskProgress = done
-				a.requestFrame()
-			})
 		}
 
+		wg.Add(workers)
+		for range workers {
+			go work()
+		}
+		wg.Wait()
+
+		// 所有 worker 已退出，这里读计数不需要再拿锁；交给主线程的是值拷贝。
 		mygo.RunOnMain(func() {
 			a.taskRunning = false
 			a.taskProgress = 0
@@ -685,10 +731,11 @@ func (a *App) inspectAllAsync() {
 	if len(repos) == 0 {
 		return
 	}
+	limit := a.asyncLimit() // 主线程读设置，协程只用快照
 	go func() {
 		defer logging.Recover("atlas-inspect-all")
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 4) // 限制并发，别让几十个 git 进程同时起
+		sem := make(chan struct{}, limit) // 与批量任务共用同一个「最大并发」设置
 		for _, r := range repos {
 			wg.Add(1)
 			sem <- struct{}{}

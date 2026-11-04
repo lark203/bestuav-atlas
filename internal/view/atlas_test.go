@@ -97,7 +97,7 @@ func TestPagesRenderWithData(t *testing.T) {
 		{"todos", []string{"待办", "把仓库页接上批量推送", "详细填写…"}},
 		{"projects", []string{"项目", "星图", "1 仓库"}},
 		{"repos", []string{"lark203/bestuav-atlas", RepoDirty, "刷新状态", "3 改"}},
-		{"settings", []string{"常规", "工作区", "快捷键", "关于与诊断"}},
+		{"settings", []string{"常规", "工作区", "快捷键", "关于与诊断", "异步任务", "最大并发"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.page, func(t *testing.T) {
@@ -411,6 +411,10 @@ func TestImportReposDedup(t *testing.T) {
 		}
 		if r.LocalPath == "" {
 			t.Errorf("指定了根目录时本地路径不该为空：%+v", r)
+		}
+		// 目录名只取仓库名，不拼 owner（例如 lark203/bestuav-atlas → bestuav-atlas）。
+		if dir := filepath.Base(r.LocalPath); dir != "bestuav-atlas" && dir != "bestuav-mygo" && dir != "gin" {
+			t.Errorf("本地目录应只含仓库名，实际 %q（仓库 %q）", r.LocalPath, r.Name)
 		}
 		hosts[r.Name] = r.Host
 	}

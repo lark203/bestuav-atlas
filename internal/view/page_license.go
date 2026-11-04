@@ -127,102 +127,116 @@ func selectedFeatures(m map[string]bool) []string {
 
 // licensePage 生成 license 页。
 func (a *App) licensePage(c *ui.Context, t *ui.Theme) {
-	ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Start).Children(func() {
-		// ---- 左：表单 ----
-		ui.Column(c).Width(460).Shrink(0).Children(func() {
-			kit.Card(c, t, func() {
-				kit.CardHeader(c, t, "授权信息", "填写后点击生成，凭证可离线校验", nil)
+	// ---- 左：表单 ----
+	form := func() {
+		kit.Card(c, t, func() {
+			kit.CardHeader(c, t, "授权信息", "填写后点击生成，凭证可离线校验", nil)
 
-				ui.Field(c, "授权对象", func() {
-					ui.TextInput(c, &a.lic.subject).Placeholder("公司或个人名称")
-				})
+			ui.Field(c, "授权对象", func() {
+				ui.TextInput(c, &a.lic.subject).Placeholder("公司或个人名称")
+			})
 
-				ui.Row(c).Gap(12).Children(func() {
-					ui.Column(c).Grow(1).Children(func() {
-						ui.Field(c, "版本", func() {
-							ui.Select(c, &a.lic.edition, []string{"标准版", "专业版", "企业版"}).Grow(1)
-						})
-					})
-					ui.Column(c).Grow(1).Children(func() {
-						ui.Field(c, "有效期", func() {
-							ui.Select(c, &a.lic.term, []string{"30 天", "1 年", "3 年", "永久"}).Grow(1)
-						})
+			ui.Row(c).Gap(12).Children(func() {
+				ui.Column(c).Grow(1).Children(func() {
+					ui.Field(c, "版本", func() {
+						ui.Select(c, &a.lic.edition, []string{"标准版", "专业版", "企业版"}).Grow(1)
 					})
 				})
+				ui.Column(c).Grow(1).Children(func() {
+					ui.Field(c, "有效期", func() {
+						ui.Select(c, &a.lic.term, []string{"30 天", "1 年", "3 年", "永久"}).Grow(1)
+					})
+				})
+			})
 
-				ui.Fieldset(c, "功能位", func() {
-					ui.Column(c).Gap(6).Children(func() {
-						for _, f := range []string{"数据导出", "开放 API", "离线部署", "优先支持"} {
-							k := f
-							if a.lic.features == nil {
-								a.lic.features = map[string]bool{}
-							}
-							// Go 里 map 元素不可取址：用局部变量承接，回写。
-							on := a.lic.features[k]
-							ui.Checkbox(c, &on, k)
-							a.lic.features[k] = on
+			ui.Fieldset(c, "功能位", func() {
+				ui.Column(c).Gap(6).Children(func() {
+					for _, f := range []string{"数据导出", "开放 API", "离线部署", "优先支持"} {
+						k := f
+						if a.lic.features == nil {
+							a.lic.features = map[string]bool{}
 						}
-					})
+						// Go 里 map 元素不可取址：用局部变量承接，回写。
+						on := a.lic.features[k]
+						ui.Checkbox(c, &on, k)
+						a.lic.features[k] = on
+					}
 				})
+			})
 
-				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-					if ui.Button(c, "重置").Clicked() {
-						a.resetLicForm()
-					}
-					if ui.PrimaryButton(c, "生成凭证").Clicked() {
-						a.generateLicense()
-					}
-				})
+			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+				if ui.Button(c, "重置").Clicked() {
+					a.resetLicForm()
+				}
+				if ui.PrimaryButton(c, "生成凭证").Clicked() {
+					a.generateLicense()
+				}
 			})
 		})
+	}
 
-		// ---- 右：结果 + 历史 ----
-		// Shrink(1)：长凭证文本不允许把右列撑到窗口外（否则整张卡片溢出）。
-		ui.Column(c).Grow(1).Shrink(1).Gap(16).Children(func() {
-			kit.Card(c, t, func() {
-				kit.CardHeader(c, t, "生成结果", "形如「载荷.签名」，载荷可读、签名防篡改", func() {
-					if ui.Button(c, "复制").Clicked() {
-						a.copyLicense()
-					}
-				})
-				if a.lic.result == "" {
-					kit.EmptyHint(c, t, "尚未生成。左侧填好授权对象后点击「生成凭证」。")
-					return
-				}
-				// 凭证很长（载荷+签名），列表里只展示头尾，完整值靠「复制」。
-				ui.Text(c, license.Shorten(a.lic.result, 12)).Selectable().
-					FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
-				if p, err := license.Verify(a.lic.result, licSecret); err == nil {
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						kit.Pill(c, t, "自校验通过", t.Success)
-						ui.Text(c, p.Edition+" · 至 "+license.ExpiryText(p)).
-							FontSize(t.FontSize - 2).TextColor(t.TextMuted).Grow(1).SingleLine()
-					})
+	// ---- 右：结果 + 历史 ----
+	results := func() {
+		kit.Card(c, t, func() {
+			kit.CardHeader(c, t, "生成结果", "形如「载荷.签名」，载荷可读、签名防篡改", func() {
+				if ui.Button(c, "复制").Clicked() {
+					a.copyLicense()
 				}
 			})
+			if a.lic.result == "" {
+				kit.EmptyHint(c, t, "尚未生成。左侧填好授权对象后点击「生成凭证」。")
+				return
+			}
+			// 凭证很长（载荷+签名），列表里只展示头尾，完整值靠「复制」。
+			ui.Text(c, license.Shorten(a.lic.result, 12)).Selectable().
+				FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+			if p, err := license.Verify(a.lic.result, licSecret); err == nil {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					kit.Pill(c, t, "自校验通过", t.Success)
+					ui.Text(c, p.Edition+" · 至 "+license.ExpiryText(p)).
+						FontSize(t.FontSize - 2).TextColor(t.TextMuted).Grow(1).SingleLine()
+				})
+			}
+		})
 
-			kit.Card(c, t, func() {
-				kit.CardHeader(c, t, "生成历史", "最近 6 条", nil)
-				if len(a.lic.history) == 0 {
-					kit.EmptyHint(c, t, "暂无记录")
-					return
-				}
-				ui.Column(c).Gap(2).Children(func() {
-					for _, h := range a.lic.history {
-						ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(6, 6).Radius(t.Radius).
-							Children(func() {
-								ui.Column(c).Gap(1).Grow(1).Children(func() {
-									ui.Text(c, h.subject).SingleLine()
-									ui.Text(c, h.edition+" · "+h.term+" · "+h.at.Format("01-02 15:04")).
-										FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
-								})
-								if ui.Button(c, "复制").Clicked() {
-									a.copyText(h.token, "已复制该条 license")
-								}
+		kit.Card(c, t, func() {
+			kit.CardHeader(c, t, "生成历史", "最近 6 条", nil)
+			if len(a.lic.history) == 0 {
+				kit.EmptyHint(c, t, "暂无记录")
+				return
+			}
+			ui.Column(c).Gap(2).Children(func() {
+				for _, h := range a.lic.history {
+					ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(6, 6).Radius(t.Radius).
+						Children(func() {
+							ui.Column(c).Gap(1).Grow(1).Children(func() {
+								ui.Text(c, h.subject).SingleLine()
+								ui.Text(c, h.edition+" · "+h.term+" · "+h.at.Format("01-02 15:04")).
+									FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 							})
-					}
-				})
+							if ui.Button(c, "复制").Clicked() {
+								a.copyText(h.token, "已复制该条 license")
+							}
+						})
+				}
 			})
 		})
+	}
+
+	// 窄窗口上下堆叠：左栏固定 460 + 右栏最小可读宽度，塞不进一行时
+	// 硬并排只会把右栏压成一条，历史记录完全不可读。
+	if a.stacked(c, 780) {
+		ui.Column(c).Gap(kit.PageGap).Children(func() {
+			form()
+			ui.Column(c).Gap(kit.PageGap).Children(results)
+		})
+		return
+	}
+	ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Start).Children(func() {
+		// 左栏平时 460，窗口收窄时允许缩（Shrink(1)），不会把右栏挤到窗外。
+		ui.Column(c).Width(460).Shrink(1).Children(form)
+
+		// Shrink(1)：长凭证文本不允许把右列撑到窗口外（否则整张卡片溢出）。
+		ui.Column(c).Grow(1).Shrink(1).Gap(16).Children(results)
 	})
 }

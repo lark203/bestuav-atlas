@@ -63,7 +63,7 @@ func (a *App) pushTaskRow(name, kind, status string) {
 func (a *App) taskPage(c *ui.Context, t *ui.Theme) {
 	// 两张卡用等宽栅格（kit.RowGrid）而非两个 Grow(1) 的 Column：
 	// 栅格列宽严格相等，不会因为一侧文字更长而变宽；同一行还会自动等高。
-	kit.RowGrid(c, 2, func() {
+	kit.RowGrid(c, a.columnsFor(c, 320, 2), func() {
 		// ---- 轻量级任务 ----
 		kit.Card(c, t, func() {
 			kit.CardHeader(c, t, "轻量级任务", "进度显示在页头下方浅线处，界面照常可操作。", nil)

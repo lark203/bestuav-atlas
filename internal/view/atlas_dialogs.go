@@ -36,6 +36,7 @@ type atlasUI struct {
 
 	// ---- 仓库页 ----
 	sel         map[int64]bool
+	repoList    ui.ListState // 仓库表（mygo ui.Table）的滚动位置与行高缓存
 	repoSearch  string
 	repoStatus  string // "" 或 "全部" = 不筛
 	repoProject string // "" 或 "全部项目" = 不筛
@@ -280,6 +281,7 @@ func (a *App) eraseDialog(c *ui.Context, t *ui.Theme) {
 		dialogDesc(c, t, "确定删除这 "+itoa(len(ids))+" 个仓库的登记吗？")
 		ui.Text(c, "只删本机登记：磁盘上的代码目录、GitHub/Gitee 等远端仓库都不会动，之后可以重新导入。").
 			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+	}, func() {
 		dialogButtons(c, func() {
 			if ui.Button(c, "取消").Clicked() {
 				a.closeAtlasDialog()
@@ -342,10 +344,14 @@ func uniqueIDs(ids []int64) []int64 {
 // atlasModal 弹窗外壳：直接用 CrychicUI 的 overlay.Modal。
 //
 // 它已经带好了标题栏、关闭按钮、遮罩、入场动画与 Escape/点击外部的关闭语义，
-// 本项目不再自绘一层。唯一要补的是「背景图让主题半透明」这件事：overlay.Modal
-// 的面板用 t.Background 画，背景图模式下它是半透明的，弹窗会和背后的内容叠在一起
-// 看不清——所以这里在构建期临时把 t.Background 换成不透明值（构建完即还原）。
-func (a *App) atlasModal(c *ui.Context, t *ui.Theme, title string, fn func()) {
+// 本项目不再自绘一层。这里补两件事：
+//
+//  1. 背景图让主题半透明：overlay.Modal 的面板用 t.Background 画，背景图模式下
+//     它是半透明的，弹窗会和背后的内容叠在一起看不清——构建期临时换成不透明值。
+//  2. 长表单在小窗口里要能滚，底部按钮必须一直看得见：正文放进一个按窗口高度
+//     限高的 Scroll，底部按钮作为独立的一行固定在正文之后。否则窗口一矮，
+//     「取消 / 导入远程仓库」就会被挤出屏幕，用户只能关窗。
+func (a *App) atlasModal(c *ui.Context, t *ui.Theme, title string, body, footer func()) {
 	bg := t.Background
 	if bg.A < 255 {
 		t.Background = ui.RGBA(bg.R, bg.G, bg.B, 1)
@@ -353,7 +359,19 @@ func (a *App) atlasModal(c *ui.Context, t *ui.Theme, title string, fn func()) {
 	defer func() { t.Background = bg }()
 
 	open := true
-	overlay.Modal(c, title, &open, overlay.ModalOptions{Close: "关闭"}, fn)
+	overlay.Modal(c, title, &open, overlay.ModalOptions{Close: "关闭"}, func() {
+		// 标题栏 / 面板内边距 / 底部按钮大约占 190 DIP；余下的都给正文。
+		// 窗口再小也留 120 DIP 的可视区，避免滚动容器被压成 0。
+		_, winH := c.Size()
+		bodyH := winH - 190
+		if bodyH < 120 {
+			bodyH = 120
+		}
+		ui.Scroll(c).MaxHeight(bodyH).Children(body)
+		if footer != nil {
+			footer()
+		}
+	})
 	if !open {
 		a.closeAtlasDialog()
 	}
@@ -435,7 +453,9 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 		})
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "用户名").Shrink(0).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-			ui.TextInput(c, &a.atlasUI.importOwner).Width(220).Shrink(0).
+			// Grow 而不是固定 220：弹窗在窄窗口里变窄时输入框跟着缩，
+			// 不能把右侧挤出面板。
+			ui.TextInput(c, &a.atlasUI.importOwner).Grow(1).
 				Placeholder("owner；留空 = 当前令牌账号")
 		})
 		ui.Text(c, "Gitea 令牌没有 read:user 权限时，在这里填用户名即可改用公开仓库列表。").
@@ -457,7 +477,7 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			choice.Toggle(c, "导入后克隆", &a.atlasUI.importClone)
 		})
-		ui.Text(c, "勾选后把远程仓库克隆到「根目录/owner-repo」；大仓库会慢，进度显示在页头。").
+		ui.Text(c, "勾选后把远程仓库克隆到「根目录/仓库名」；大仓库会慢，进度显示在页头。").
 			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -471,7 +491,7 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 		})
 		ui.Text(c, "读取列表需要该平台的令牌：设置 → 工作区；Gitea 还要填实例地址。").
 			TextColor(t.TextMuted).FontSize(t.FontSize - 2)
-
+	}, func() {
 		dialogButtons(c, func() {
 			if ui.Button(c, "取消").Clicked() {
 				a.closeAtlasDialog()
@@ -625,7 +645,7 @@ func (a *App) repoDialog(c *ui.Context, t *ui.Theme) {
 		dialogRow(c, "备注", func() {
 			ui.TextInput(c, &f.Note).Grow(1)
 		})
-
+	}, func() {
 		dialogButtons(c, func() {
 			if f.ID != 0 {
 				if ui.Button(c, "从列表移除").Clicked() {
@@ -740,7 +760,7 @@ func (a *App) projectDialog(c *ui.Context, t *ui.Theme) {
 				f.Status = got
 			}
 		})
-
+	}, func() {
 		dialogButtons(c, func() {
 			if f.ID != 0 {
 				if ui.Button(c, "删除项目").Clicked() {
@@ -816,7 +836,7 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 			ui.TextInput(c, &f.Due).Width(200).
 				Placeholder("2026-11-30 18:00 或 2026-11-30，可空")
 		})
-
+	}, func() {
 		dialogButtons(c, func() {
 			if f.ID != 0 {
 				if ui.Button(c, "删除").Clicked() {
@@ -910,7 +930,7 @@ func (a *App) commitDialog(c *ui.Context, t *ui.Theme) {
 		})
 		ui.Text(c, "注意：这会把这批仓库里所有未提交的改动一并提交，且直接推到当前分支。").
 			TextColor(t.Warning).FontSize(t.FontSize - 2)
-
+	}, func() {
 		dialogButtons(c, func() {
 			if ui.Button(c, "取消").Clicked() {
 				a.closeAtlasDialog()

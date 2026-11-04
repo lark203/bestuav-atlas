@@ -78,7 +78,7 @@ type Settings struct {
 	RepoLast    string `json:"repoLast"`   // 最近一次上传/下载的展示文本（本机）
 
 	// ---- 星图：仓库管理用的本机设置 ----
-	// WorkRoot 仓库本地根目录：导入仓库时默认把代码放在 <WorkRoot>/<owner-repo>。
+	// WorkRoot 仓库本地根目录：导入仓库时默认把代码放在 <WorkRoot>/<仓库名>。
 	// 空串 = <用户主目录>/atlas-repos（见 internal/view/atlas_data.go 的 workRoot）。
 	// GitHub 令牌复用上面的 RepoToken：同一个 PAT 既要读写配置包、也要读仓库列表，
 	// 存两份只会让用户改一处、忘一处。
@@ -116,6 +116,12 @@ type Settings struct {
 	// 与 javafx 版的 idleTime 配置对应，详见 internal/view/pagelife.go。
 	PageIdleMinutes int `json:"pageIdleMinutes"`
 
+	// AsyncConcurrency 是后台异步任务同时执行的上限（1–MaxAsyncConcurrency）。
+	// 作用范围是「一批同类仓库操作」：导入后克隆、批量拉取/提交推送/刷新远端、
+	// 全量状态探测。每个任务完成一个再补一个，避免二十个仓库一起克隆把磁盘与
+	// 网络打满。
+	AsyncConcurrency int `json:"asyncConcurrency"`
+
 	// Shortcuts 是用户自定义的全局快捷键：动作 id → 键位字符串（如 "cmd+2"）。
 	// 没写的动作用默认键位；空串表示禁用该动作。格式见 internal/shortcut。
 	Shortcuts map[string]string `json:"shortcuts,omitempty"`
@@ -141,6 +147,13 @@ const (
 	DefaultPageIdleMinutes = 15
 	// MaxPageIdleMinutes 设置页可调上限（分钟）。
 	MaxPageIdleMinutes = 120
+
+	// DefaultAsyncConcurrency 后台异步任务的默认并发数：一次克隆 3~5 个是
+	// 「快」与「不打满网络/磁盘」的折中，默认取中间值 4。
+	DefaultAsyncConcurrency = 4
+	// MaxAsyncConcurrency 设置页可调的并发上限。再高只会让几十个 git 进程
+	// 抢同一块磁盘，收益很小。
+	MaxAsyncConcurrency = 8
 )
 
 // 配色方案（强调色系）的稳定标识：设置文件里存这些字符串，视图层再把它们映射到
@@ -201,6 +214,7 @@ func Default() *Settings {
 		MenuOpacity:        DefaultMenuOpacity,
 		ContentOpacity:     DefaultContentOpacity,
 		PageIdleMinutes:    DefaultPageIdleMinutes,
+		AsyncConcurrency:   DefaultAsyncConcurrency,
 		PetSkin:            PetSkinCat,
 		PetReminderMinutes: DefaultPetReminderMinutes,
 		PetX:               -1,
@@ -371,6 +385,10 @@ func normalize(s *Settings) {
 	// 显式越界时处理；缺字段得 0，按语义就是「不销毁」，这里保留用户意图）。
 	if s.PageIdleMinutes < 0 || s.PageIdleMinutes > MaxPageIdleMinutes {
 		s.PageIdleMinutes = DefaultPageIdleMinutes
+	}
+	// 异步并发：0 是老文件缺字段（默认值），负数/超上限是脏数据；都回落到默认。
+	if s.AsyncConcurrency < 1 || s.AsyncConcurrency > MaxAsyncConcurrency {
+		s.AsyncConcurrency = DefaultAsyncConcurrency
 	}
 }
 

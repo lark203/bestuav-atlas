@@ -23,20 +23,32 @@ import (
 //   - 批量动作只在「有选中」时出现，避免误触；
 //   - 所有联网/写操作都要用户点一下（没有定时器、没有自动 fetch）。
 
-// repoCols 仓库表的列。
+// repoCols 仓库表的列（mygo 原生 ui.Table）。
 //
-// 固定的「状态/评分/差异/操作」给足宽度，其余一律让位给仓库名——名字被截成
-// 「lark203/bestu…」时两张行看起来一模一样，那才是真的难用。
-var repoCols = []data.Column{
-	{Title: "仓库", Width: 210},
-	{Title: "平台", Width: 76},
-	{Title: "项目", Width: 84},
-	{Title: "分支", Width: 70},
-	{Title: "状态", Width: 92},
-	{Title: "评分", Width: 84},
-	{Title: "差异", Width: 76},
-	{Title: "最近提交"},
-	{Title: "操作", Width: 200, End: true},
+// 为什么从 CrychicUI 的 SelectTable 换成 ui.Table：
+//   - 窗口变窄时列总宽超过表格，ui.Table 会自己出现横向滚动条，表头跟着一起
+//     滚；SelectTable 只是把超出的列裁掉，用户会以为「后面没有数据」；
+//   - 行是虚拟化的，仓库多时只为可见行建元素；
+//   - 表头固定，行在下面滚动，不再随整页滚走。
+//
+// 固定列给足宽度，只有「最近提交」吃剩余空间；名字被截成「lark203/bestu…」
+// 时两行看起来一模一样，那才是真的难用。
+//
+// repoTableWideEnough 是「所有列都能摆下」的内容区宽度：固定列合计 934，
+// 「最近提交」至少 150，再加卡片内边距。窄于它时筛选条会提示可以左右滚动。
+const repoTableWideEnough = 1120
+
+var repoCols = []ui.TableColumn{
+	{Title: "", Width: 42, Fixed: true},
+	{Title: "仓库", Width: 210, Fixed: true},
+	{Title: "平台", Width: 76, Fixed: true},
+	{Title: "项目", Width: 84, Fixed: true},
+	{Title: "分支", Width: 70, Fixed: true},
+	{Title: "状态", Width: 92, Fixed: true},
+	{Title: "评分", Width: 84, Fixed: true},
+	{Title: "差异", Width: 76, Fixed: true},
+	{Title: "最近提交", MinWidth: 150},
+	{Title: "操作", Width: 200, Fixed: true, Align: ui.End},
 }
 
 // ratingStars 把 0–5 的评分画成五颗星（0 分显示「—」，表示还没评）。
@@ -56,7 +68,7 @@ func (a *App) repoPage(c *ui.Context, t *ui.Theme) {
 		a.atlasBanner(c, t, d)
 
 		// ---- 顶部：统计 + 主操作 ----
-		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Column(c).Gap(4).Grow(1).Children(func() {
 				ui.Text(c, "把本地仓库与远端状态摊在一张表里").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 			})
@@ -113,8 +125,37 @@ func (a *App) repoFilterBar(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 		ui.TextInput(c, &u.repoSearch).Width(220).Placeholder("搜索仓库 / 路径 / 备注")
 		choice.Dropdown(c, "状态筛选", statusOpts, &u.repoStatus)
 		choice.Dropdown(c, "项目筛选", projectOpts, &u.repoProject)
+		// 表头里的「全选」随 SelectTable 一起换掉了，放到筛选条这里：
+		// 只作用于当前筛选出的行，清空时也只清这些行，和用户眼前的列表一致。
+		if len(rows) > 0 {
+			if u.sel == nil {
+				u.sel = make(map[int64]bool, len(rows))
+			}
+			selected := 0
+			for _, r := range rows {
+				if u.sel[r.ID] {
+					selected++
+				}
+			}
+			all := selected == len(rows)
+			if ui.Checkbox(c, &all, "全选").Changed() {
+				for _, r := range rows {
+					if all {
+						u.sel[r.ID] = true
+					} else {
+						delete(u.sel, r.ID)
+					}
+				}
+			}
+		}
 		ui.Text(c, itoa(len(rows))+" 个仓库").TextColor(t.TextMuted).
 			FontSize(t.FontSize-2).Margin(6, 0, 0, 0)
+		// mygo 的滚动条是「悬停才出现」的覆盖式指示条：窄窗口里如果不提示，
+		// 用户看到表格在「状态」列被裁掉，很容易以为后面没有数据。
+		if a.contentWidth(c) < repoTableWideEnough {
+			ui.Text(c, "列较多，可左右滚动表格查看全部").
+				FontSize(t.FontSize-2).TextColor(t.TextMuted).Margin(6, 0, 0, 0)
+		}
 	})
 }
 
@@ -150,90 +191,107 @@ func (a *App) repoBulkBar(c *ui.Context, t *ui.Theme) {
 	}
 }
 
-// repoTable 仓库表本体（SelectTable：表头全选 + 每行勾选）。
+// repoTable 仓库表本体（mygo ui.Table：固定表头 + 横向/纵向滚动 + 行虚拟化）。
+//
+// 选择仍按仓库 id 存在 u.sel 里，而不是按行号：筛选、排序变化时选中项跟着
+// 仓库走，不会错位到别的行上。
 func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 	u := &a.atlasUI
 	if u.sel == nil {
 		u.sel = make(map[int64]bool, len(rows))
 	}
+	list := &u.repoList
+	list.Key = func(i int) any { return rows[i].ID }
+	list.Label = func(i int) string { return rows[i].Name }
 
-	// 把「按 id 的选择」投影成 SelectTable 需要的「按行号的选择」，绘制完再写回。
-	// 这样筛选、排序变化不会让选中项错位到别的仓库上。
-	sel := ui.Selection[int]{}
-	for i, r := range rows {
-		if u.sel[r.ID] {
-			sel.Add(i)
-		}
-	}
-
-	data.SelectTable(c, "仓库列表", repoCols, len(rows), &sel,
-		func(row, col int) {
-			r := rows[row]
-			switch col {
-			case 0:
-				ui.Column(c).Gap(1).Children(func() {
-					ui.Text(c, r.Name).SingleLine().Bold()
-					sub := firstNonEmpty(r.LocalPath, r.URL)
-					if sub != "" {
-						ui.Text(c, sub).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
-					}
-				})
-			case 1:
-				p := a.platformForRepo(r)
-				lbl := ui.Text(c, p.Label()).SingleLine().FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-				if p.Host != "" {
-					lbl.Tooltip(p.Host)
+	ui.Table(c, list, repoCols, len(rows), func(row, col int) {
+		r := rows[row]
+		switch col {
+		case 0:
+			on := u.sel[r.ID]
+			if ui.Checkbox(c, &on, "").Changed() {
+				if on {
+					u.sel[r.ID] = true
+				} else {
+					delete(u.sel, r.ID)
 				}
-			case 2:
-				ui.Text(c, a.atlas().projectNameOrDash(r.ProjectID)).SingleLine()
-			case 3:
-				ui.Text(c, firstNonEmpty(r.Branch, "—")).SingleLine().TextColor(t.TextMuted)
-			case 4:
-				pill := kit.Pill(c, t, r.Status, repoStatusColor(t, r.Status))
-				if r.StatusMsg != "" {
-					pill.Tooltip(r.StatusMsg)
-				}
-			case 5:
-				stars := ui.Text(c, ratingStars(r.Importance)).
-					FontSize(t.FontSize - 2).TextColor(t.Warning).SingleLine()
-				stars.Tooltip("重要 " + itoa(r.Importance) + " · 可学习 " + itoa(r.Learning) + " · 难度 " + itoa(r.Difficulty))
-			case 6:
-				ui.Text(c, repoDiffText(r)).FontSize(t.FontSize - 2).SingleLine().TextColor(t.TextMuted)
-			case 7:
-				ui.Column(c).Gap(1).Children(func() {
-					ui.Text(c, firstNonEmpty(r.LastCommit, "—")).SingleLine().FontSize(t.FontSize - 2)
-					if !r.LastCommitAt.IsZero() {
-						ui.Text(c, r.LastCommitAt.Local().Format("2006-01-02 15:04")).
-							FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
-					}
-				})
-			case 8:
-				ui.Row(c).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-					if smallButton(c, "详情").Clicked() {
-						a.openRepoDetail(r)
-					}
-					if smallButton(c, "拉取").Clicked() {
-						a.runRepoBatch(batchPull, []int64{r.ID}, "")
-					}
-					if smallButton(c, "提交").Clicked() {
-						a.openCommitDialog([]int64{r.ID})
-					}
-					// 编辑移到详情页（「编辑登记」），这一列留给高频动作 + 删除。
-					if smallButton(c, "删除").Clicked() {
-						a.confirmErase([]int64{r.ID})
-					}
-				})
 			}
-		},
-		data.SelectTableOptions{All: "全选", Row: "选择第 %d 行"})
-
-	for i, r := range rows {
-		if sel.Has(i) {
-			u.sel[r.ID] = true
-		} else {
-			delete(u.sel, r.ID)
+		case 1:
+			ui.Column(c).Gap(1).Children(func() {
+				ui.Text(c, r.Name).SingleLine().Bold()
+				sub := firstNonEmpty(r.LocalPath, r.URL)
+				if sub != "" {
+					ui.Text(c, sub).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+				}
+			})
+		case 2:
+			p := a.platformForRepo(r)
+			lbl := ui.Text(c, p.Label()).SingleLine().FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+			if p.Host != "" {
+				lbl.Tooltip(p.Host)
+			}
+		case 3:
+			ui.Text(c, a.atlas().projectNameOrDash(r.ProjectID)).SingleLine()
+		case 4:
+			ui.Text(c, firstNonEmpty(r.Branch, "—")).SingleLine().TextColor(t.TextMuted)
+		case 5:
+			pill := kit.Pill(c, t, r.Status, repoStatusColor(t, r.Status))
+			if r.StatusMsg != "" {
+				pill.Tooltip(r.StatusMsg)
+			}
+		case 6:
+			stars := ui.Text(c, ratingStars(r.Importance)).
+				FontSize(t.FontSize - 2).TextColor(t.Warning).SingleLine()
+			stars.Tooltip("重要 " + itoa(r.Importance) + " · 可学习 " + itoa(r.Learning) + " · 难度 " + itoa(r.Difficulty))
+		case 7:
+			ui.Text(c, repoDiffText(r)).FontSize(t.FontSize - 2).SingleLine().TextColor(t.TextMuted)
+		case 8:
+			ui.Column(c).Gap(1).Children(func() {
+				ui.Text(c, firstNonEmpty(r.LastCommit, "—")).SingleLine().FontSize(t.FontSize - 2)
+				if !r.LastCommitAt.IsZero() {
+					ui.Text(c, r.LastCommitAt.Local().Format("2006-01-02 15:04")).
+						FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+				}
+			})
+		case 9:
+			ui.Row(c).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
+				if smallButton(c, "详情").Clicked() {
+					a.openRepoDetail(r)
+				}
+				if smallButton(c, "拉取").Clicked() {
+					a.runRepoBatch(batchPull, []int64{r.ID}, "")
+				}
+				if smallButton(c, "提交").Clicked() {
+					a.openCommitDialog([]int64{r.ID})
+				}
+				// 编辑移到详情页（「编辑登记」），这一列留给高频动作 + 删除。
+				if smallButton(c, "删除").Clicked() {
+					a.confirmErase([]int64{r.ID})
+				}
+			})
 		}
+	}).Height(a.repoTableHeight(c, len(rows))).Label("仓库列表")
+}
+
+// repoTableHeight 表格本体给多高：行少时按内容自然高度，行多时在表格内部
+// 滚动（而不是把整页越撑越长）。
+//
+// 为什么按窗口高度封顶：表格在一个可滚动的页面里，如果只按行数给高度，
+// 二十个仓库会把按钮和筛选条推到一屏之外；给一个「视口内最多这么高」的
+// 上限，表头固定、行内滚动，浏览体验才像表格。
+func (a *App) repoTableHeight(c *ui.Context, rowCount int) float32 {
+	_, winH := c.Size()
+	maxH := winH - 400 // 页头、统计卡、筛选条与卡片内边距的粗略预留
+	if maxH < 220 {
+		maxH = 220
 	}
+	// 行高随字号缩放：字号 20 时仍按 14 的固定行高估，最后一行会被切掉。
+	rowH := float32(c.Theme().FontSize)*2.8 + 20
+	natural := 44 + float32(rowCount)*rowH
+	if natural < maxH {
+		return natural
+	}
+	return maxH
 }
 
 // repoDiffText 一览式差异文案：改动数 + 领先 + 落后。

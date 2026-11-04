@@ -94,14 +94,25 @@ func (a *App) repoDetailPage(c *ui.Context, t *ui.Theme) {
 			}
 		})
 
+		// README 与「评价 / 仓库信息」两栏。窗口窄时上下堆叠：右栏只剩
+		// 两百出头时，五颗星与「保存评价」按钮会挤成一团，README 也读不下。
+		readme := func() { a.readmeCard(c, t, r) }
+		side := func() {
+			a.reviewCard(c, t, r)
+			a.repoMetaCard(c, t, r)
+		}
+		if a.stacked(c, 760) {
+			ui.Column(c).Gap(kit.PageGap).Children(func() {
+				readme()
+				ui.Column(c).Gap(kit.PageGap).Children(side)
+			})
+			return
+		}
 		// AlignItems(Start)：Row 默认把子项垂直居中，README 卡片会被推到页面中间
 		// （视觉上像上面空了一大块）。两栏都应该从顶部开始。
 		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(2).Children(func() { a.readmeCard(c, t, r) })
-			ui.Column(c).Grow(1).Gap(kit.PageGap).Children(func() {
-				a.reviewCard(c, t, r)
-				a.repoMetaCard(c, t, r)
-			})
+			ui.Column(c).Grow(2).Children(readme)
+			ui.Column(c).Grow(1).Gap(kit.PageGap).Children(side)
 		})
 	})
 }
