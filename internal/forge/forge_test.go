@@ -1,4 +1,4 @@
-package forge
+﻿package forge
 
 import (
 	"context"
@@ -141,10 +141,10 @@ func TestPlatformURLs(t *testing.T) {
 		web   string
 		clone string
 	}{
-		{Platform{GitHub, "github.com"}, "GitHub", "GitHub", "https://github.com/o/r", "https://github.com/o/r.git"},
-		{Platform{Gitee, "gitee.com"}, "Gitee", "Gitee", "https://gitee.com/o/r", "https://gitee.com/o/r.git"},
-		{Platform{AtomGit, "atomgit.com"}, "AtomGit", "AtomGit", "https://atomgit.com/o/r", "https://atomgit.com/o/r.git"},
-		{Platform{Gitea, "gitea.example.com"}, "Gitea", "Gitea（gitea.example.com）", "https://gitea.example.com/o/r", "https://gitea.example.com/o/r.git"},
+		{Platform{Provider: GitHub, Host: "github.com"}, "GitHub", "GitHub", "https://github.com/o/r", "https://github.com/o/r.git"},
+		{Platform{Provider: Gitee, Host: "gitee.com"}, "Gitee", "Gitee", "https://gitee.com/o/r", "https://gitee.com/o/r.git"},
+		{Platform{Provider: AtomGit, Host: "atomgit.com"}, "AtomGit", "AtomGit", "https://atomgit.com/o/r", "https://atomgit.com/o/r.git"},
+		{Platform{Provider: Gitea, Host: "gitea.example.com"}, "Gitea", "Gitea（gitea.example.com）", "https://gitea.example.com/o/r", "https://gitea.example.com/o/r.git"},
 	}
 	for _, tc := range cases {
 		if got := tc.p.Label(); got != tc.label {
@@ -164,7 +164,7 @@ func TestPlatformURLs(t *testing.T) {
 
 func TestRepoGitHub(t *testing.T) {
 	var gotPath, gotUA, gotAccept, gotVersion, gotAuth string
-	c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotUA = r.Header.Get("User-Agent")
 		gotAccept = r.Header.Get("Accept")
@@ -222,7 +222,7 @@ func TestRepoGitHub(t *testing.T) {
 
 func TestRepoGitee(t *testing.T) {
 	var gotPath, gotToken, gotAuth string
-	c := newForgeTestClient(t, Platform{Gitee, "gitee.com"}, "gitee-token", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: Gitee, Host: "gitee.com"}, "gitee-token", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotToken = r.URL.Query().Get("access_token")
 		gotAuth = r.Header.Get("Authorization")
@@ -267,13 +267,13 @@ func TestRepoGitee(t *testing.T) {
 }
 
 func TestRepoGitea(t *testing.T) {
-	c0 := New(Platform{Gitea, "gitea.example.com"}, "")
+	c0 := New(Platform{Provider: Gitea, Host: "gitea.example.com"}, "")
 	if got := c0.base(); got != "https://gitea.example.com/api/v1" {
 		t.Errorf("Gitea 默认 base = %q", got)
 	}
 
 	var gotPath, gotAuth string
-	c := newForgeTestClient(t, Platform{Gitea, "gitea.example.com"}, "gitea-pat", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: Gitea, Host: "gitea.example.com"}, "gitea-pat", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		writeForgeJSON(t, w, map[string]any{
@@ -316,7 +316,7 @@ func TestRepoGitea(t *testing.T) {
 
 func TestRepoAtomGit(t *testing.T) {
 	var gotPath, gotToken, gotAuth string
-	c := newForgeTestClient(t, Platform{AtomGit, "atomgit.com"}, "atom-token", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: AtomGit, Host: "atomgit.com"}, "atom-token", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotToken = r.URL.Query().Get("access_token")
 		gotAuth = r.Header.Get("Authorization")
@@ -356,7 +356,7 @@ func TestRepoAtomGit(t *testing.T) {
 func TestReadmeGitHub(t *testing.T) {
 	const body = "# 无人机图集\n\n| 字段 | 含义 |\n| --- | --- |\n"
 	var gotPath, gotAuth string
-	c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		writeForgeJSON(t, w, map[string]any{
@@ -399,7 +399,7 @@ func TestReadmeAtomGitURL(t *testing.T) {
 	})
 	srv = httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	c := New(Platform{AtomGit, "atomgit.com"}, "atom-token")
+	c := New(Platform{Provider: AtomGit, Host: "atomgit.com"}, "atom-token")
 	c.BaseURL = srv.URL
 	c.HTTP = srv.Client()
 
@@ -422,7 +422,7 @@ func TestReadmeAtomGitURL(t *testing.T) {
 }
 
 func TestReadmeNotFound(t *testing.T) {
-	c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 	})
@@ -437,7 +437,7 @@ func TestReadmeNotFound(t *testing.T) {
 
 func TestReadmeGiteeFallback(t *testing.T) {
 	var paths []string
-	c := newForgeTestClient(t, Platform{Gitee, "gitee.com"}, "gitee-token", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: Gitee, Host: "gitee.com"}, "gitee-token", func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		switch r.URL.Path {
 		case "/repos/o/r/readme":
@@ -467,7 +467,7 @@ func TestReadmeGiteeFallback(t *testing.T) {
 
 func TestReadmeTruncated(t *testing.T) {
 	body := strings.Repeat("航拍影像。\n", 100000) // 约 1.5 MB
-	c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
 		writeForgeJSON(t, w, map[string]any{
 			"name":     "README.md",
 			"encoding": "base64",
@@ -495,7 +495,7 @@ func TestReadmeTruncated(t *testing.T) {
 
 func TestListReposPaging(t *testing.T) {
 	var pages []string
-	c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/users/o/repos" {
 			t.Errorf("路径 = %q", r.URL.Path)
 		}
@@ -542,7 +542,7 @@ func TestListReposPaging(t *testing.T) {
 
 func TestListReposCurrentUser(t *testing.T) {
 	var gotPath, gotAffiliation, gotAuth string
-	c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "gh-token", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAffiliation = r.URL.Query().Get("affiliation")
 		gotAuth = r.Header.Get("Authorization")
@@ -562,7 +562,7 @@ func TestListReposCurrentUser(t *testing.T) {
 
 func TestListReposGiteaPagingParams(t *testing.T) {
 	var gotPath, gotLimit, gotPage string
-	c := newForgeTestClient(t, Platform{Gitea, "gitea.example.com"}, "", func(w http.ResponseWriter, r *http.Request) {
+	c := newForgeTestClient(t, Platform{Provider: Gitea, Host: "gitea.example.com"}, "", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotLimit = r.URL.Query().Get("limit")
 		gotPage = r.URL.Query().Get("page")
@@ -578,7 +578,7 @@ func TestListReposGiteaPagingParams(t *testing.T) {
 
 func TestStatusErrors(t *testing.T) {
 	t.Run("rate limit", func(t *testing.T) {
-		c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
+		c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded for 203.0.113.7."}`))
 		})
@@ -589,7 +589,7 @@ func TestStatusErrors(t *testing.T) {
 		}
 	})
 	t.Run("unauthorized", func(t *testing.T) {
-		c := newForgeTestClient(t, Platform{Gitee, "gitee.com"}, "bad", func(w http.ResponseWriter, r *http.Request) {
+		c := newForgeTestClient(t, Platform{Provider: Gitee, Host: "gitee.com"}, "bad", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
 		})
@@ -599,7 +599,7 @@ func TestStatusErrors(t *testing.T) {
 		}
 	})
 	t.Run("not found", func(t *testing.T) {
-		c := newForgeTestClient(t, Platform{GitHub, "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
+		c := newForgeTestClient(t, Platform{Provider: GitHub, Host: "github.com"}, "", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		})
 		_, err := c.Repo(context.Background(), "o", "r")
@@ -608,7 +608,7 @@ func TestStatusErrors(t *testing.T) {
 		}
 	})
 	t.Run("other error body", func(t *testing.T) {
-		c := newForgeTestClient(t, Platform{Gitee, "gitee.com"}, "", func(w http.ResponseWriter, r *http.Request) {
+		c := newForgeTestClient(t, Platform{Provider: Gitee, Host: "gitee.com"}, "", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte("服务暂时不可用"))
 		})
@@ -639,5 +639,38 @@ func TestNewFallback(t *testing.T) {
 	}
 	if c.Token != "tok" {
 		t.Errorf("Token 未 trim：%q", c.Token)
+	}
+}
+
+// TestGiteaScheme Gitea 同时支持 http 与 https：协议以地址/配置为准。
+func TestGiteaScheme(t *testing.T) {
+	httpP, owner, repo, ok := Detect("http://gitea.example.com:3000/team/repo.git")
+	if !ok || httpP.Provider != Gitea || httpP.Scheme != "http" {
+		t.Fatalf("http 地址应识别为 Gitea + http：%+v ok=%v", httpP, ok)
+	}
+	if owner != "team" || repo != "repo" {
+		t.Errorf("owner/repo 解析错误：%q/%q", owner, repo)
+	}
+	if got := httpP.WebURL("team", "repo"); got != "http://gitea.example.com:3000/team/repo" {
+		t.Errorf("WebURL 应跟随 http：%q", got)
+	}
+	if got := httpP.CloneURL("team", "repo"); got != "http://gitea.example.com:3000/team/repo.git" {
+		t.Errorf("CloneURL 应跟随 http：%q", got)
+	}
+	if got := New(httpP, "").base(); got != "http://gitea.example.com:3000/api/v1" {
+		t.Errorf("API base 应跟随 http：%q", got)
+	}
+
+	httpsP, _, _, ok := Detect("https://gitea.example.com/team/repo")
+	if !ok || httpsP.Scheme == "http" {
+		t.Fatalf("https 地址不应变成 http：%+v", httpsP)
+	}
+	if got := New(httpsP, "").base(); got != "https://gitea.example.com/api/v1" {
+		t.Errorf("https 的 API base 错误：%q", got)
+	}
+
+	// 只给 host（来自设置）时默认 https。
+	if got := PlatformForHost("gitea.example.com").WebURL("a", "b"); got != "https://gitea.example.com/a/b" {
+		t.Errorf("未指定协议时应默认 https：%q", got)
 	}
 }

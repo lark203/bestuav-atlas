@@ -133,6 +133,41 @@ func TestWorkspaceSettingsTab(t *testing.T) {
 	}
 }
 
+// TestGiteaSchemeFollowsConfig 自建 Gitea 的协议以配置为准：填 http:// 就全程 http。
+func TestGiteaSchemeFollowsConfig(t *testing.T) {
+	a, _ := newTestApp(t)
+	a.settings.GiteaHost = "http://gitea.local:3000"
+
+	// 另一种情况：仓库登记里只有 host（没有 URL），协议从设置取。
+	p := a.platformForRepo(store.Repo{Name: "team/repo", Host: "gitea.local:3000"})
+	if p.Provider != forge.Gitea || p.Scheme != "http" {
+		t.Fatalf("平台应识别为 Gitea + http：%+v", p)
+	}
+	if got := p.WebURL("team", "repo"); got != "http://gitea.local:3000/team/repo" {
+		t.Errorf("WebURL 应跟随配置的 http：%q", got)
+	}
+
+	// 导入时地址自带 http：存下来的 URL 必须还是 http。
+	added, _, ids := a.importRepos([]string{"http://gitea.local:3000/team/repo.git"},
+		0, filepath.Join(t.TempDir(), "repos"), forge.PlatformForHost("github.com"))
+	if added != 1 || len(ids) != 1 {
+		t.Fatalf("导入失败：added=%d ids=%v", added, ids)
+	}
+	r, ok := a.repoByID(ids[0])
+	if !ok {
+		t.Fatal("仓库没读到")
+	}
+	if r.Host != "gitea.local:3000" || r.URL != "http://gitea.local:3000/team/repo" {
+		t.Errorf("导入结果应保留 http 协议：host=%q url=%q", r.Host, r.URL)
+	}
+
+	// 配置改成 https 后，同一个只存 host 的仓库应回到 https。
+	a.settings.GiteaHost = "https://gitea.local:3000"
+	if got := a.platformForRepo(store.Repo{Name: "team/repo", Host: "gitea.local:3000"}).Scheme; got == "http" {
+		t.Errorf("配置 https 时不应再用 http：%q", got)
+	}
+}
+
 // TestEmptyPagesRender 空库时首页/仓库页给出引导，而不是白屏。
 func TestEmptyPagesRender(t *testing.T) {
 	a, _ := newTestApp(t)

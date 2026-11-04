@@ -429,6 +429,7 @@ func (a *App) importPlatform() forge.Platform {
 		if h := hostOf(a.settings.GiteaHost); h != "" {
 			p.Host = h
 		}
+		p.Scheme = a.giteaScheme()
 	}
 	return p
 }

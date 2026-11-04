@@ -1,4 +1,4 @@
-package view
+﻿package view
 
 import (
 	"strings"
@@ -176,7 +176,7 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 					}
 				})
 			case 1:
-				p := platformForRepo(r)
+				p := a.platformForRepo(r)
 				lbl := ui.Text(c, p.Label()).SingleLine().FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 				if p.Host != "" {
 					lbl.Tooltip(p.Host)

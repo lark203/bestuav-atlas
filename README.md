@@ -155,11 +155,14 @@ bestuav-atlas/
 |---|---|---|---|
 | GitHub | `github.com` | `api.github.com` | 「GitHub 令牌」（与配置包同步共用同一个 PAT） |
 | Gitee | `gitee.com` | `gitee.com/api/v5` | 「Gitee 令牌」 |
-| Gitea | 自建域名（其它主机） | `https://<实例>/api/v1` | 「Gitea 实例」+「Gitea 令牌」 |
+| Gitea | 自建域名（其它主机） | `<实例地址>/api/v1`（**协议跟随实例地址**，http/https 均可） | 「Gitea 实例」+「Gitea 令牌」 |
 | AtomGit | `atomgit.com` | `api.atomgit.com/api/v5` | 「AtomGit 令牌」 |
 
 克隆与推送**不用**这些令牌：走本机 git 凭据（credential helper / SSH），所以私有仓库
 的克隆只需要你本机 git 已经能访问它。API 令牌只用于「读列表 / 读元信息 / 读 README」。
+
+> **自建 Gitea 的协议以配置为准**：实例地址填 `http://gitea.example.com` 就全程用 http
+> （网页、克隆、API），填 `https://…` 就用 https；地址里带 `http://` 的仓库也按 http 记录。
 
 ## 八、批量操作的边界
 

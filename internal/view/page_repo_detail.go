@@ -1,4 +1,4 @@
-package view
+﻿package view
 
 import (
 	"context"
@@ -116,7 +116,7 @@ func (a *App) readmeCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 		kit.CardHeader(c, t, "README",
 			firstNonEmpty(u.readmeSource(), "本地仓库根目录里的 README，只读"),
 			func() {
-				if u.readmeFrom == "remote" || a.tokenFor(platformForRepo(r).Host) != "" {
+				if u.readmeFrom == "remote" || a.tokenFor(a.platformForRepo(r).Host) != "" {
 					if ui.Button(c, "从远程读取").Clicked() && !u.busy {
 						a.fetchRemoteReadme(r)
 					}
@@ -201,7 +201,7 @@ func (a *App) reviewCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 func (a *App) repoMetaCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 	kit.Card(c, t, func() {
 		kit.CardHeader(c, t, "仓库信息", "", nil)
-		p := platformForRepo(r)
+		p := a.platformForRepo(r)
 		kit.KV(c, t, "平台", p.Label()+"（"+firstNonEmpty(p.Host, "未知")+"）")
 		kit.KV(c, t, "远端", firstNonEmpty(r.URL, "—"))
 		kit.KV(c, t, "本地目录", firstNonEmpty(r.LocalPath, "未设置"))
@@ -250,7 +250,7 @@ func (a *App) loadLocalReadme(r store.Repo) {
 
 // fetchRemoteReadme 用平台 API 拉 README（手动触发）。
 func (a *App) fetchRemoteReadme(r store.Repo) {
-	p := platformForRepo(r)
+	p := a.platformForRepo(r)
 	owner, repo, ok := forgeOwnerRepo(r, p)
 	if !ok {
 		a.toast("无法从地址解析出 owner/repo")

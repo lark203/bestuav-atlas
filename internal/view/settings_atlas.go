@@ -44,10 +44,13 @@ func (a *App) workspaceSection(c *ui.Context, t *ui.Theme) {
 
 	settingRow(c, t, "Gitea 实例", func() {
 		if ui.TextInput(c, &a.settings.GiteaHost).Grow(1).
-			Placeholder("https://gitea.example.com").Changed() {
+			Placeholder("http:// 或 https://gitea.example.com（以填写为准）").Changed() {
 			a.persist()
 		}
 	})
+	ui.Text(c, "自建 Gitea 常在内网 http 上：这里写 http:// 就全程用 http（网页、克隆、API），"+
+		"写 https:// 就用 https。").
+		TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 	a.tokenRow(c, t, "Gitea 令牌", &a.settings.GiteaToken, forgePlatforms[2],
 		"访问令牌：read:repository")
 
@@ -84,6 +87,7 @@ func (a *App) testPlatformToken(p forge.Platform) {
 			a.toast("先填 Gitea 实例地址")
 			return
 		}
+		p.Scheme = a.giteaScheme()
 	}
 	a.listPlatformRepos(p, "", func(names []string, err error) {
 		if err != nil {

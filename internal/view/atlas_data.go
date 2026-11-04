@@ -539,16 +539,23 @@ func sameDay(a, b time.Time) bool {
 //
 // 为什么不用「只存 Provider」：自建 Gitea 的主机名各人不同，网页/克隆地址要靠 Host
 // 拼；Provider 只决定 API 长什么样。
-func platformForRepo(r store.Repo) forge.Platform {
-	if host := strings.TrimSpace(r.Host); host != "" {
-		return forge.PlatformForHost(host)
+func (a *App) platformForRepo(r store.Repo) forge.Platform {
+	// 地址里带协议：以地址为准（自建 Gitea 可能跑在 http 上）。
+	if p, _, _, ok := forge.Detect(r.URL); ok {
+		return p
 	}
-	for _, raw := range []string{r.URL, r.Name} {
-		if p, _, _, ok := forge.Detect(raw); ok {
-			return p
-		}
+	if p, _, _, ok := forge.Detect(r.Name); ok {
+		return p
 	}
-	return forge.PlatformForHost("github.com")
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return forge.PlatformForHost("github.com")
+	}
+	p := forge.PlatformForHost(host)
+	if p.Provider == forge.Gitea {
+		p.Scheme = a.giteaScheme()
+	}
+	return p
 }
 
 // hostOf 把用户填的实例地址变成 host（去掉协议与路径）。
@@ -560,6 +567,15 @@ func hostOf(raw string) string {
 		s = s[:i]
 	}
 	return s
+}
+
+// giteaScheme 从设置里的 Gitea 实例地址取协议：写了 http:// 就是 http，
+// 其余（含空）按 https。自建实例两种都有，必须「以配置为准」。
+func (a *App) giteaScheme() string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.settings.GiteaHost)), "http://") {
+		return "http"
+	}
+	return "https"
 }
 
 // tokenFor 按平台主机取令牌。
@@ -579,12 +595,13 @@ func (a *App) tokenFor(host string) string {
 	}
 }
 
-// forgeClient 按平台构造 API 客户端；自建 Gitea 用设置里的实例地址覆盖 Host。
+// forgeClient 按平台构造 API 客户端；自建 Gitea 用设置里的实例地址与协议覆盖。
 func (a *App) forgeClient(p forge.Platform) *forge.Client {
 	if p.Provider == forge.Gitea {
 		if h := hostOf(a.settings.GiteaHost); h != "" {
 			p.Host = h
 		}
+		p.Scheme = a.giteaScheme()
 	}
 	return forge.New(p, a.tokenFor(p.Host))
 }

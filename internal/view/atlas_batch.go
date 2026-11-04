@@ -72,15 +72,18 @@ func batchTimeout(k batchKind) time.Duration {
 // 跨线程读同一份结构在 -race 下是数据竞争。批次开始前拍一份快照，协程只用它。
 type tokenSet struct {
 	github, gitee, atomgit, gitea, giteaHost string
+	// giteaScheme 自建 Gitea 的协议（http/https），同样在批次前定好。
+	giteaScheme string
 }
 
 func (a *App) tokensSnapshot() tokenSet {
 	return tokenSet{
-		github:    strings.TrimSpace(a.settings.RepoToken),
-		gitee:     strings.TrimSpace(a.settings.GiteeToken),
-		atomgit:   strings.TrimSpace(a.settings.AtomGitToken),
-		gitea:     strings.TrimSpace(a.settings.GiteaToken),
-		giteaHost: hostOf(a.settings.GiteaHost),
+		github:      strings.TrimSpace(a.settings.RepoToken),
+		gitee:       strings.TrimSpace(a.settings.GiteeToken),
+		atomgit:     strings.TrimSpace(a.settings.AtomGitToken),
+		gitea:       strings.TrimSpace(a.settings.GiteaToken),
+		giteaHost:   hostOf(a.settings.GiteaHost),
+		giteaScheme: a.giteaScheme(),
 	}
 }
 
@@ -98,10 +101,13 @@ func (ts tokenSet) tokenFor(host string) string {
 	}
 }
 
-// client 按平台构造 API 客户端（自建 Gitea 用快照里的实例地址）。
+// client 按平台构造 API 客户端（自建 Gitea 用快照里的实例地址与协议）。
 func (ts tokenSet) client(p forge.Platform) *forge.Client {
-	if p.Provider == forge.Gitea && ts.giteaHost != "" {
-		p.Host = ts.giteaHost
+	if p.Provider == forge.Gitea {
+		if ts.giteaHost != "" {
+			p.Host = ts.giteaHost
+		}
+		p.Scheme = ts.giteaScheme
 	}
 	return forge.New(p, ts.tokenFor(p.Host))
 }
@@ -129,7 +135,7 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 	// 「请填写令牌」，用户要点掉 N 条提示才知道问题在哪。Gitea 还要实例地址。
 	tokens := a.tokensSnapshot()
 	if kind == batchRemote {
-		p := platformForRepo(repos[0])
+		p := a.platformForRepo(repos[0])
 		if tokens.tokenFor(p.Host) == "" {
 			a.toast("刷新远端信息需要 " + p.Label() + " 令牌：设置 → 工作区")
 			return
@@ -293,7 +299,7 @@ func (a *App) cloneRepos(ids []int64) {
 // 平台由仓库登记里的 Host / URL 决定：GitHub / Gitee / Gitea / AtomGit 各用各的
 // 端点与令牌，见 internal/forge。
 func (a *App) refreshRemoteOne(ctx context.Context, r store.Repo, tokens tokenSet) error {
-	p := platformForRepo(r)
+	p := a.platformForRepo(r)
 	owner, name, ok := forgeOwnerRepo(r, p)
 	if !ok {
 		return fmt.Errorf("无法从地址解析出 owner/repo")

@@ -1,5 +1,14 @@
 # 变更记录
 
+## 0.3.2
+
+- **自建 Gitea 支持 http 与 https**：`Platform` 增加 `Scheme`，网页地址、克隆地址与 Gitea 的
+  API base 全部跟随它；默认 https，实例地址填 `http://…` 即全程 http。
+  仓库地址里带 `http://` 的导入也会原样保留协议（以地址/配置为准，不再硬编码 https）。
+- 设置页「Gitea 实例」的提示与占位改成「http:// 或 https://…（以填写为准）」。
+- 测试：forge 的 `TestGiteaScheme`（识别 / WebURL / CloneURL / API base 三种组合）、
+  view 的 `TestGiteaSchemeFollowsConfig`（只存 host 时按配置取协议、导入保留 http）。
+
 ## 0.3.1
 
 设置与导入的交互调整（真机试用后的反馈）。

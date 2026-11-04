@@ -52,6 +52,11 @@ var defaultHTTP = &http.Client{Timeout: defaultTimeout}
 type Platform struct {
 	Provider Provider
 	Host     string // github.com / gitee.com / atomgit.com / gitea.example.com
+	// Scheme 网页、克隆与（Gitea）API 使用的协议："http" 或 "https"；空 = https。
+	//
+	// 自建 Gitea 常跑在内网 http 上，所以协议必须「以配置/地址为准」，不能硬编码
+	// https。公开平台（GitHub/Gitee/AtomGit）始终 https。
+	Scheme string
 }
 
 // Label 平台展示名。
@@ -80,12 +85,20 @@ func (p Platform) APILabel() string {
 
 // WebURL 仓库网页地址。
 func (p Platform) WebURL(owner, repo string) string {
-	return "https://" + p.host() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
+	return p.scheme() + "://" + p.host() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
 }
 
-// CloneURL 仓库 HTTPS 克隆地址。
+// CloneURL 仓库 HTTPS 克隆地址（协议跟随平台：自建 Gitea 可能是 http）。
 func (p Platform) CloneURL(owner, repo string) string {
 	return p.WebURL(owner, repo) + ".git"
+}
+
+// scheme 返回实际使用的协议：只认 http/https，其余一律 https。
+func (p Platform) scheme() string {
+	if strings.EqualFold(strings.TrimSpace(p.Scheme), "http") {
+		return "http"
+	}
+	return "https"
 }
 
 // host 返回实际使用的 host；未填写时按平台给默认值。
@@ -193,6 +206,9 @@ func Detect(rawURL string) (p Platform, owner, repo string, ok bool) {
 		return Platform{}, "", "", false
 	}
 
+	// webScheme 记录地址里写的协议：http 只对自建 Gitea 有意义，
+	// 公开平台即使被写成 http 也按 https 处理（它们只服务 https）。
+	webScheme := "https"
 	var host, path string
 	if i := strings.Index(s, "://"); i >= 0 {
 		u, err := url.Parse(s)
@@ -204,6 +220,9 @@ func Detect(rawURL string) (p Platform, owner, repo string, ok bool) {
 		case "http", "https", "ssh", "git", "git+ssh", "ssh+git":
 		default:
 			return Platform{}, "", "", false
+		}
+		if scheme == "http" {
+			webScheme = "http"
 		}
 		// SSH 的端口是 22/2222，不是网页与 API 的端口；Host 用于拼 https 地址，
 		// 因此只保留主机名。HTTP(S) 的非标准端口则可能是自建实例的网页端口，保留。
@@ -255,10 +274,15 @@ func Detect(rawURL string) (p Platform, owner, repo string, ok bool) {
 	if owner == "" || repo == "" {
 		return Platform{}, "", "", false
 	}
-	return PlatformForHost(host), owner, repo, true
+	platform := PlatformForHost(host)
+	if platform.Provider == Gitea && webScheme == "http" {
+		platform.Scheme = "http"
+	}
+	return platform, owner, repo, true
 }
 
 // PlatformForHost 由 host 造平台（同一套映射规则；用于只存了 host 的场景）。
+// Scheme 留空 = https；自建 Gitea 需要 http 时由调用方补上。
 func PlatformForHost(host string) Platform {
 	host = normalizeHost(host)
 	if host == "" {
@@ -392,7 +416,9 @@ func (c *Client) base() string {
 	case Gitee:
 		return "https://gitee.com/api/v5"
 	case Gitea:
-		return "https://" + c.platform().host() + "/api/v1"
+		// 协议跟平台（自建实例可能是 http）；上文的 BaseURL 覆盖优先。
+		p := c.platform()
+		return p.scheme() + "://" + p.host() + "/api/v1"
 	case AtomGit:
 		return "https://api.atomgit.com/api/v5"
 	default:
