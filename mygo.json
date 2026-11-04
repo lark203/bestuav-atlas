@@ -1,0 +1,14 @@
+{
+  "name": "星图",
+  "slug": "bestuav-atlas",
+  "identifier": "com.bestuav.atlas",
+  "version": "0.1.0",
+  "publisher": "BestUAV",
+  "copyright": "Copyright © 2026 BestUAV",
+  "out": "build",
+  "updates": {
+    "publicKey": "dQRkHqPY8P84h5h/JbASWGfTj9Uo8NJFkKXNsHrvX3g=",
+    "github": "lark203/bestuav-atlas",
+    "tagPrefix": "v"
+  }
+}

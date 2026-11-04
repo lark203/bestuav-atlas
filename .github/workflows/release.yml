@@ -1,0 +1,177 @@
+# 三平台自动发版（方案 A：GitHub 同时充当代码镜像与应用更新源）
+#
+# 触发：推送形如 v0.1.0 的 tag。tag 必须等于 mygo.json 的 "v" + version，
+#       prepare 作业会校验，不一致直接失败——版本号错位会让客户端更新到错误的包。
+#
+# 作业：
+#   prepare 校验版本、创建 draft release（已存在则跳过，支持重跑）
+#   build   matrix 三个原生 runner 各自打包并上传到同一个 draft release：
+#             windows-latest → windows/amd64     NSIS 安装包 + 签名更新包
+#             macos-latest   → darwin/universal  .app + .dmg（ad-hoc/Developer ID 签名）
+#             ubuntu-latest  → linux/amd64       裸二进制 + .deb + .tar.gz + install.sh
+#
+# 产物（draft release 资产）：
+#   <slug>-<ver>-<target>.tar.gz / *.dmg / *-setup-*.exe / *.deb
+#   update-<target>.json  ← ed25519 签名的更新清单，客户端「设置 → 检查更新」读它
+#   SHA256SUMS / install.sh / install.ps1
+#
+# 发布：三平台全部上传成功后，人工把 draft 转正式（draft 对客户端不可见）：
+#   gh release edit v0.1.0 --draft=false --latest
+# 之后已安装客户端即可在设置页看到更新。
+#
+# 所需 Secret：MYGO_UPDATER_PRIVATE_KEY = `go tool mygo keygen` 生成的 mygo-update.key
+# 内容（base64 单行）。对应公钥已固化在 mygo.json 的 updates.publicKey 里；
+# 私钥一旦更换，旧版本将无法验证新包，必须保留好。
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# gh CLI 需要写 release 的权限；GITHUB_TOKEN 默认只读。
+permissions:
+  contents: write
+
+# 同一 tag 的发布串行化，避免重复点击/重跑时互相覆盖资产。
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  prepare:
+    name: Prepare draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # --generate-notes 需要完整历史来生成变更列表。
+          fetch-depth: 0
+
+      - name: Verify tag matches mygo.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="$(python3 -c 'import json;print(json.load(open("mygo.json"))["version"])')"
+          echo "tag=${tag} mygo.json version=${version}"
+          if [ "${tag}" != "v${version}" ]; then
+            echo "::error::tag ${tag} 与 mygo.json 的 version ${version} 不匹配（期望 v${version}）。先改 mygo.json 并提交，再打 tag。"
+            exit 1
+          fi
+
+      - name: Create draft release if absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "release ${tag} 已存在，复用（重跑时资产会被 --clobber 覆盖）"
+          else
+            # --latest=false：仓库可能还有其他用途的 release，不抢占 latest 标记；
+            # 客户端的 tagged feed 通过 releases 列表按 tag 前缀发现新版本，不依赖 latest。
+            gh release create "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --draft \
+              --title "${tag}" \
+              --generate-notes \
+              --latest=false
+          fi
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    # 必须显式关掉 cgo：mygo build 只在 CGO_ENABLED 为空时才补 "CGO_ENABLED=0"，
+    # 若 runner 环境里已导出 1，交叉编译目标（如 macOS 上编 amd64、Linux 上编
+    # 任何非本机目标）会用本机 gcc 去编 cgo runtime 而报 sigaction/setenv 一堆错。
+    # 本项目依赖（modernc.org/sqlite 等）都是纯 Go，关 cgo 不影响功能。
+    env:
+      CGO_ENABLED: '0'
+    strategy:
+      fail-fast: false
+      # 串行：三个平台都会上传 SHA256SUMS，而 mygo 的合并逻辑是
+      # 「下载已有 → 追加本平台条目 → 重新上传」，并发会互相覆盖丢行。
+      max-parallel: 1
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+          - os: macos-latest
+            platform: darwin/universal
+          - os: ubuntu-latest
+            platform: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # 读 go.mod 的 go 指令（当前 1.27.3），保证与本机一致。
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check update signing key
+        shell: bash
+        env:
+          KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: |
+          if [ -z "${KEY}" ]; then
+            echo "::error::缺少 MYGO_UPDATER_PRIVATE_KEY secret。没有签名私钥时 mygo 不会产出 update-*.json，客户端将无法更新。"
+            exit 1
+          fi
+
+      - name: Build and upload
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: go tool mygo build -platform ${{ matrix.platform }} -upload
+
+      # Windows 免安装版：GitHub 不接受中文资产名（上传后会被改成 default.exe），
+      # 所以把 量子科学.exe + icon.png 打成一个英文名 zip 再补传。
+      # zip 内部仍是中文文件名（归档内部名不受限制）。
+      - name: Package portable zip (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/make-portable-zip.py --dir build/windows-amd64
+          gh release upload "${GITHUB_REF_NAME}" \
+            build/windows-amd64/*-windows-portable.zip \
+            --repo "${GITHUB_REPOSITORY}" --clobber
+
+      # 构建日志之外再留一份产物，便于排查（release 上传失败时也能取回文件）。
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.os }}
+          path: build/
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        # 用 pwsh 而非 bash：Windows runner 上 GITHUB_STEP_SUMMARY 是
+        # D:\a\_temp\... 形式的原生路径，Git Bash 里重定向会被 MSYS 的路径
+        # 转换搞坏（写成相对文件名）。三个 hosted runner 都预装 pwsh。
+        shell: pwsh
+        run: |
+          $fence = '```'
+          $lines = @("### ${{ matrix.platform }}", "")
+          $files = @(Get-ChildItem -Path build -Recurse -File -ErrorAction SilentlyContinue)
+          if ($files.Count -gt 0) {
+            $lines += $fence
+            foreach ($f in $files) {
+              $rel = $f.FullName.Substring((Get-Location).Path.Length + 1)
+              $lines += ("{0}  {1:N0} KB" -f $rel, ($f.Length / 1KB))
+            }
+            $lines += $fence
+          } else {
+            $lines += "(no artifacts)"
+          }
+          $lines += ""
+          $lines += "三平台全部完成后发布：gh release edit $env:GITHUB_REF_NAME --draft=false --latest"
+          $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

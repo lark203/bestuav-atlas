@@ -1,0 +1,10 @@
+/build/
+/.mygo/
+/dist/
+mygo_windows_*.syso
+*.exe
+.idea/
+
+# 更新签名私钥：一旦入库等于把发版权限交出去
+mygo-update.key
+mygo-update.pub
