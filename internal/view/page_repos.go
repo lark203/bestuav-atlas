@@ -234,7 +234,7 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 				lbl.Tooltip(p.Host)
 			}
 		case 3:
-			ui.Text(c, a.atlas().projectNameOrDash(r.ProjectID)).SingleLine()
+			a.repoProjectCell(c, t, r)
 		case 4:
 			ui.Text(c, firstNonEmpty(r.Branch, "—")).SingleLine().TextColor(t.TextMuted)
 		case 5:
@@ -274,6 +274,61 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 			})
 		}
 	}).Height(a.repoTableHeight(c, len(rows))).Label("仓库列表")
+}
+
+// repoProjectCell 仓库表的「项目」单元格：点一下就弹出项目菜单，选中即写库。
+//
+// 为什么不在表格里放常驻下拉框：项目列只有 84 DIP，常驻下拉框会把这一列
+// 变得比「仓库」还抢眼；用「文字 + 箭头」的菜单按钮，平时仍是表格里的一格，
+// 悬停/点击时才表现成可操作控件。菜单用 mygo 在窗口内绘制的 PopoverMenu，
+// 和主题一致，也不依赖系统原生菜单。
+func (a *App) repoProjectCell(c *ui.Context, t *ui.Theme, r store.Repo) {
+	d := a.atlas()
+	current := d.projectNameOrDash(r.ProjectID)
+
+	btn := ui.ButtonBase(c).Label("归属项目："+current).
+		FillWidth().Padding(2, 4).Radius(t.Radius).
+		Cursor(ui.CursorPointer).
+		Tooltip("归属项目：" + current + "；点击选择")
+	if btn.Hovered() {
+		btn.Background(kit.Alpha(t.Accent, 0.10))
+	}
+	btn.Children(func() {
+		ui.Text(c, current).SingleLine().Grow(1)
+		ui.Icon(c, icons.ChevronDown).FontSize(12).TextColor(t.TextMuted).Shrink(0)
+	})
+
+	btn.PopoverMenuButton(func(m *ui.Menu) {
+		if m.Item("未归属").Radio(r.ProjectID == 0).Chosen() {
+			a.setRepoProject(r, 0)
+		}
+		if len(d.projects) > 0 {
+			m.Separator()
+		}
+		for _, p := range d.projects {
+			p := p
+			if m.Item(p.Name).Radio(r.ProjectID == p.ID).Chosen() {
+				a.setRepoProject(r, p.ID)
+			}
+		}
+	})
+}
+
+// setRepoProject 把一个仓库的归属项目改掉并立刻刷新列表。
+func (a *App) setRepoProject(r store.Repo, projectID int64) {
+	if r.ProjectID == projectID {
+		return
+	}
+	next := r
+	next.ProjectID = projectID
+	if !a.saveRepo(next) {
+		return
+	}
+	if projectID == 0 {
+		a.toast("已改为「未归属」")
+		return
+	}
+	a.toast("已归入「" + a.atlas().projectNameOrDash(projectID) + "」")
 }
 
 // repoTableHeight 表格本体给多高：行少时按内容自然高度，行多时在表格内部

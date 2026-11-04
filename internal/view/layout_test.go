@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"bestuav-atlas/internal/settings"
+	"bestuav-atlas/internal/store"
 )
 
 // 这一组测试守的是「窗口伸缩时不出错」：总览两张卡片等高、小窗口里弹窗
@@ -126,6 +127,39 @@ func TestReposTableScrollsSideways(t *testing.T) {
 	}
 	if after.X+after.W > 900 {
 		t.Errorf("横向滚动后「删除」仍在窗口外：x=%.1f w=%.1f", after.X, after.W)
+	}
+}
+
+// TestRepoProjectCellPicksProject 点表格里的项目单元格，能从菜单改归属并写库。
+func TestRepoProjectCellPicksProject(t *testing.T) {
+	a, st := newTestApp(t)
+	_, repoID := seedAtlas(t, a, st)
+	otherID, err := st.CreateProject(store.Project{Name: "量子科学", Status: "进行中"})
+	if err != nil {
+		t.Fatalf("建第二个项目失败: %v", err)
+	}
+	a.reloadAtlas()
+	a.page = "repos"
+
+	tt := renderPageSized(t, a, "repos", 1440, 900)
+	if err := tt.Click("归属项目：星图"); err != nil {
+		t.Fatalf("点项目单元格失败: %v；文本：%v", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("量子科学") {
+		t.Fatalf("项目菜单里没有另一个项目；文本：%v", tt.Texts())
+	}
+	if err := tt.Click("量子科学"); err != nil {
+		t.Fatalf("点菜单项失败: %v", err)
+	}
+	tt.Frame()
+
+	got, ok, err := st.RepoByID(repoID)
+	if err != nil || !ok {
+		t.Fatalf("读仓库失败: ok=%v err=%v", ok, err)
+	}
+	if got.ProjectID != otherID {
+		t.Fatalf("归属项目未写库：got=%d want=%d", got.ProjectID, otherID)
 	}
 }
 
