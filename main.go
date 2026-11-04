@@ -190,9 +190,14 @@ func main() {
 	// 存储与日志都就绪后再写启动审计，保证这条事件能真正入库。
 	announceStartup(db != nil)
 
+	// 星图只提供简体中文界面。先声明应用语言并固定 locale，再创建窗口：
+	// MyGo 自带控件（尤其日期/时间选择器与日历）的月份、星期、按钮文案
+	// 都跟着窗口语言走，不会因为系统是英文区域就显示英文。
+	mygo.App.SetLanguages("zh-Hans")
+	mygo.App.SetLocale("zh-Hans")
+
 	mygo.App.WhenReady(func() {
-		// 星图的界面文案全是中文，MyGo 自带控件（尤其日期/时间选择器与日历）
-		// 也固定跟随简体中文，避免英文系统区域下出现「11/5/2026 / 11:43 PM」。
+		// 再设一次：窗口创建前确保当前主循环的 locale 已是简体中文。
 		mygo.App.SetLocale("zh-Hans")
 
 		// 主循环已就绪，应用已保存的主题（跟随系统 / 浅色 / 深色）。
@@ -207,12 +212,17 @@ func main() {
 			Content:   ui.View(a.View),
 		})
 		mainWin = win
+		// 窗口创建后再固定一次：某些平台在窗口就绪时会把语言重新读一遍，
+		// 这里兜底，保证第一帧的日期/时间控件就是中文。
+		mygo.App.SetLocale("zh-Hans")
 		// 注入重绘触发器：轻量任务的进度由后台 goroutine 更新，需要主动请求重绘。
 		a.SetInvalidator(win.Invalidate)
 		// 注入窗口句柄：浮出面板（Flyout）这类子窗口需要它作为 Parent。
 		a.SetWindow(win)
 		// 原生窗口创建完成后再设置图标，避免平台窗口尚未就绪导致设置失败。
 		win.OnReadyToShow(func() {
+			// 平台窗口就绪后再确认一次语言：第一次可见的帧必须已经是中文。
+			mygo.App.SetLocale("zh-Hans")
 			if err := win.SetIcon(appIconPNG); err != nil {
 				// 图标缺失不应阻断启动：仅打印告警（部分平台窗口未就绪时会返回错误）。
 				logging.Warn("app", "设置窗口图标失败", "err", err.Error())

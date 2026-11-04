@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/i18n"
+	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/ui"
 
 	"bestuav-atlas/internal/gitx"
@@ -199,6 +201,32 @@ func TestTodoDialogUsesPickers(t *testing.T) {
 	}
 	if tt.HasText("2026-11-30 18:00 或 2026-11-30，可空") {
 		t.Error("不应再出现手填截止时间的占位提示")
+	}
+}
+
+// TestChineseDatePickerLocale 英文系统区域下，日期/时间控件仍应显示中文月份、
+// 星期与上午/下午（应用启动时 SetLocale("zh-Hans") 的效果）。
+func TestChineseDatePickerLocale(t *testing.T) {
+	a, st := newTestApp(t)
+	seedAtlas(t, a, st)
+	a.page = "todos"
+	a.openTodoDialog(a.atlas().todos[0])
+
+	tt := ui.NewTester(func(c *ui.Context) { a.View(c) }, 1440, 900)
+	tt.SetLocale("zh-Hans")
+	tt.SetRegion(i18n.RegionFor("en-US"))
+	tt.Frame()
+	tt.Advance(600 * time.Millisecond)
+	tt.Frame()
+	tt.Frame()
+	if err := tt.Click("截止日期"); err != nil {
+		t.Fatalf("打开日历失败: %v", err)
+	}
+	tt.Frame()
+	for _, want := range []string{"周日", "周一", "上午"} {
+		if !tt.HasText(want) {
+			t.Errorf("中文日期/时间控件缺少 %q；文本：%v", want, tt.Texts())
+		}
 	}
 }
 
