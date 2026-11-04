@@ -124,6 +124,9 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 			// ===== 桌宠 =====
 			kit.Section(c, t, "桌宠", func() { a.petSection(c, t) })
 
+			// ===== 工作区（仓库管理的本机参数）=====
+			kit.Section(c, t, "工作区", func() { a.workspaceSection(c, t) })
+
 		}
 
 		if shortcuts {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"bestuav-atlas/internal/store"
 	"bestuav-atlas/internal/ui/icons"
 	"bestuav-atlas/internal/view/shell"
 )
@@ -60,15 +61,37 @@ type navGroup struct {
 // 每帧的查询走 navAll() 里一次性建好的缓存，不要直接调本函数。
 func navRegistry() []navGroup {
 	return []navGroup{
-		// 首页不放进分组（侧栏顶部第一项，无分组标题）。
-		// build 指向欢迎页：新项目刚生成时没有业务数据，首页承担「下一步做什么」的
-		// 引导；原来的运行概览降级为最末分组里的一页（见下方「概览示例」）。
+		// 首页不放进分组（侧栏顶部第一项，无分组标题）：它是「现在该干什么」的总览，
+		// 不是某个业务分组里的页面。
 		{title: "", items: []navItem{
-			{id: "home", label: "首页", icon: icons.Home, build: (*App).welcomePage,
+			{id: "home", label: "总览", icon: icons.Home, build: (*App).overviewPage,
 				policy: pagePolicy{keep: keepPinned}}, // 首页常驻，不必重建
 		}},
 
-		{title: "工作台", items: []navItem{
+		// 研发：星图的三块核心业务。顺序即日常使用顺序——先看要做什么（待办），
+		// 再看这些事属于谁（项目），最后处理代码（仓库）。
+		{title: "研发", items: []navItem{
+			{id: "todos", label: "待办", icon: icons.Checklist, build: (*App).todoPage,
+				policy: pagePolicy{keep: keepCached},
+				tools: []toolAction{
+					{icon: icons.Checklist, label: "新建待办", tip: "打开待办编辑弹窗",
+						run: func(a *App) { a.openTodoDialog(store.Todo{}) }},
+				}},
+			{id: "projects", label: "项目", icon: icons.IdCard, build: (*App).projectPage,
+				policy: pagePolicy{keep: keepCached},
+				tools: []toolAction{
+					{icon: icons.Package, label: "新建项目", tip: "新建一个项目",
+						run: func(a *App) { a.openProjectDialog(store.Project{}) }},
+				}},
+			{id: "repos", label: "仓库", icon: icons.Code, build: (*App).repoPage,
+				// 选中项与筛选条件要「切回来还在」，用缓存；闲置超时后由全局规则带走。
+				// 页头不再放工具按钮：导入/刷新在页面顶部已经各有一个入口，
+				// 同一屏两个「导入仓库」只会让人多想一秒。
+				policy: pagePolicy{keep: keepCached}},
+		}},
+
+		// 工具：工程自带的能力，与业务无关。放在最后，不干扰日常路径。
+		{title: "工具", items: []navItem{
 			{id: "task", label: "异步任务", icon: icons.Bolt, build: (*App).taskPage,
 				// 任务列表要"切回来还在"，用缓存；闲置 30 分钟再由全局规则带走。
 				policy: pagePolicy{keep: keepCached},
@@ -83,23 +106,11 @@ func navRegistry() []navGroup {
 					{icon: icons.Refresh, label: "重置表单", tip: "清空当前表单"},
 					{icon: icons.Copy, label: "复制结果", tip: "复制最近一次生成的 license"},
 				}},
-			// 新建项目：以本工程为基调生成新项目。生成后该菜单会从产物里消失
-			// （scaffold 按 id 摘掉本项并删除本页文件），不会自我复制到下一代。
 		}},
-
-		// 概览示例：首页原本的内容（KPI + 趋势图 + 近期任务表）。放到最后、
-		// 且默认在「新建项目」里不勾选——它是一份可以照着写的布局参考，
-		// 不是新项目必须的页面。
 	}
 }
 
-// overviewPageID 「概览示例」分组的运行概览页 id。
-//
-// 这一页属于可裁剪分组：新项目勾掉「概览示例」后它就不存在了，所以欢迎页里那个
-// 入口按钮要先按注册表判断再决定画不画（见 page_welcome.go）。
-const overviewPageID = "home-overview"
-
-// settingsPageID 底部固定「设置」页的 id（页面文件、欢迎页、单实例转发共用）。
+// settingsPageID 底部固定「设置」页的 id（页面文件、单实例转发共用）。
 const settingsPageID = "settings"
 
 // settingsPageLabel 「设置」项的侧栏文字与页头标题。

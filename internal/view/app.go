@@ -179,6 +179,12 @@ type App struct {
 	// repoBusy 仓库同步请求进行中（避免重复点击）。
 	repoBusy bool
 
+	// ---- 星图业务（待办 / 项目 / 仓库，见 atlas_data.go / atlas_dialogs.go）----
+	// atlasCache 是三个业务页共用的数据库快照（写操作后失效、下一帧重读）；
+	// atlasUI 是弹窗、筛选与多选状态。
+	atlasCache atlasCache
+	atlasUI    atlasUI
+
 	// ---- 伴生桌宠（见 pet.go） ----
 	petWin         *mygo.Window // 桌宠小窗（nil = 未创建）
 	petApplied     bool         // 已应用的开关状态（用于检测变化）
@@ -978,6 +984,7 @@ func (a *App) View(c *ui.Context) {
 	a.closeChoiceDialog(c, t)
 	a.basicInfoDialog(c, t)
 	a.updateDialog(c, t)
+	a.atlasDialogs(c, t)
 	// 重量级任务遮罩：盖在最上层并拦截一切操作（用户要求「完成前禁止操作」）。
 	a.heavyTaskMask(c, t)
 	// 彩带庆祝：任务完成或手动触发时撒一把，飘完自动清空。

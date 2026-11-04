@@ -6,11 +6,12 @@
 //	代价：二进制约增大 10MB，性能比 cgo 版低 2–3 倍——对「本地单机、几千行数据」的
 //	桌面场景完全够用（实测本包插入+查询在毫秒级）。
 //
-// 存什么（三张业务表 + 两张基础表）：
+// 存什么（业务表 + 基础表）：
 //   - task            异步任务记录（重启后仍在）
 //   - license_record  授权凭证生成历史
 //   - app_event       应用事件/错误/崩溃（由 internal/logging 的 Recorder 写入）
 //   - page_pref       页面私有的键值状态（筛选条件、草稿、上次选中的一行…）
+//   - project / repo / todo  Atlas 的项目、代码仓库与待办，见 atlas.go
 //   - schema_meta     键值元数据（schema 版本、首次演示数据是否已灌入等）
 //
 // 不存什么：**用户偏好仍留在 settings.json**。单机单用户的键值配置用 JSON 文件是
@@ -35,7 +36,8 @@ import (
 // schemaVersion 当前数据库结构版本，写入 schema_meta 便于将来做增量迁移。
 //
 // 2：新增 page_pref（页面私有键值），见 internal/view/prefs.go。
-const schemaVersion = "2"
+// 3：新增 project / repo / todo
+const schemaVersion = "3"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -182,6 +184,52 @@ func (s *Store) migrate() error {
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (page, key)
 		)`,
+		// 业务三表：项目是归类容器，仓库与待办都靠 project_id 挂靠它（0 = 未归类）。
+		// 刻意不建外键：删项目时业务数据不该跟着消失，由 DeleteProject 在事务里置 0。
+		//
+		// 注意 "desc" 必须加双引号——DESC 是 SQLite 关键字，裸写会让建表语句语法错误。
+		`CREATE TABLE IF NOT EXISTS project (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT NOT NULL,
+			"desc"     TEXT NOT NULL DEFAULT '',
+			status     TEXT NOT NULL DEFAULT '进行中',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS repo (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id     INTEGER NOT NULL DEFAULT 0,
+			name           TEXT NOT NULL,
+			url            TEXT NOT NULL DEFAULT '',
+			local_path     TEXT NOT NULL DEFAULT '',
+			branch         TEXT NOT NULL DEFAULT '',
+			note           TEXT NOT NULL DEFAULT '',
+			status         TEXT NOT NULL DEFAULT '未知',
+			status_msg     TEXT NOT NULL DEFAULT '',
+			dirty          INTEGER NOT NULL DEFAULT 0,
+			ahead          INTEGER NOT NULL DEFAULT 0,
+			behind         INTEGER NOT NULL DEFAULT 0,
+			last_commit    TEXT NOT NULL DEFAULT '',
+			last_commit_at TEXT NOT NULL DEFAULT '',
+			checked_at     TEXT NOT NULL DEFAULT '',
+			created_at     TEXT NOT NULL,
+			updated_at     TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_repo_project ON repo(project_id)`,
+		`CREATE TABLE IF NOT EXISTS todo (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			title      TEXT NOT NULL,
+			note       TEXT NOT NULL DEFAULT '',
+			project_id INTEGER NOT NULL DEFAULT 0,
+			repo_id    INTEGER NOT NULL DEFAULT 0,
+			priority   INTEGER NOT NULL DEFAULT 1,
+			status     TEXT NOT NULL DEFAULT '待办',
+			due_at     TEXT NOT NULL DEFAULT '',
+			done_at    TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_todo_status ON todo(status, due_at)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.Exec(q); err != nil {

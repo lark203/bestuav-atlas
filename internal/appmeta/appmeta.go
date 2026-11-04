@@ -1,4 +1,4 @@
-// Package appmeta 集中存放应用的「产品标识」常量，供全项目统一引用。
+﻿// Package appmeta 集中存放应用的「产品标识」常量，供全项目统一引用。
 //
 // 动机：产品名、窗口标题、配置目录名、应用唯一标识符等字符串如果散落在
 // main.go / sidebar.go / settings.go / settings_page.go 等多处各自硬编码，
@@ -9,7 +9,7 @@
 //
 //	mygo.json "name"       ≡ Title      （窗口标题 / 打包产品名）
 //	mygo.json "identifier" ≡ Identifier （打包标识符 / 单实例锁 key）
-//	mygo.json "slug"       ≈ Name 的语义（安装目录名），当前为 quantum
+//	mygo.json "slug"       ≈ Name 的语义（安装目录名），当前为 bestuav-atlas
 //
 // 注意：
 //   - Name 同时是 os.UserConfigDir 下的配置子目录名。改名会导致旧用户的

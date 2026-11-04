@@ -77,6 +77,13 @@ type Settings struct {
 	RepoPath    string `json:"repoPath"`   // 留空用 profiles/<设备名>.mygo-profile.zip
 	RepoLast    string `json:"repoLast"`   // 最近一次上传/下载的展示文本（本机）
 
+	// ---- 星图：仓库管理用的本机设置 ----
+	// WorkRoot 仓库本地根目录：导入仓库时默认把代码放在 <WorkRoot>/<owner-repo>。
+	// 空串 = <用户主目录>/atlas-repos（见 internal/view/atlas_data.go 的 workRoot）。
+	// GitHub 令牌复用上面的 RepoToken：同一个 PAT 既要读写配置包、也要读仓库列表，
+	// 存两份只会让用户改一处、忘一处。
+	WorkRoot string `json:"workRoot"`
+
 	// ---- 伴生桌宠 ----
 	// PetEnabled 是否显示桌宠（无边框透明置顶小窗，见 internal/view/pet.go）。
 	PetEnabled bool `json:"petEnabled"`

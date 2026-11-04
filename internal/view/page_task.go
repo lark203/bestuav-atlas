@@ -139,6 +139,11 @@ func (a *App) clearFinishedTasks() {
 	a.toast("已清空完成记录")
 }
 
+// homeSummary 任务队列表头的摘要文案（累计条数）。
+func (a *App) homeSummary() string {
+	return fmt.Sprintf("累计任务 %d 条", len(a.tasks))
+}
+
 // taskCols 任务队列的列定义（CrychicUI data.DataTable）。Width 只对固定列生效，
 // End 控制右对齐；点表头即按该列排序（data.DataTable 在内部翻转 *ui.SortOrder）。
 var taskCols = []data.Column{
