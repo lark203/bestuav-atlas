@@ -57,7 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          version="$(python3 -c 'import json;print(json.load(open("mygo.json"))["version"])')"
+          # utf-8-sig：Windows 编辑器可能给 mygo.json 加 UTF-8 BOM，普通 json.load 会直接抛错。
+          version="$(python3 -c 'import json;print(json.load(open("mygo.json",encoding="utf-8-sig"))["version"])')"
           echo "tag=${tag} mygo.json version=${version}"
           if [ "${tag}" != "v${version}" ]; then
             echo "::error::tag ${tag} 与 mygo.json 的 version ${version} 不匹配（期望 v${version}）。先改 mygo.json 并提交，再打 tag。"

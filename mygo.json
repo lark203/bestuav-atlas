@@ -1,8 +1,8 @@
-﻿{
+{
   "name": "星图",
   "slug": "bestuav-atlas",
   "identifier": "com.bestuav.atlas",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "BestUAV",
   "copyright": "Copyright © 2026 BestUAV",
   "out": "build",

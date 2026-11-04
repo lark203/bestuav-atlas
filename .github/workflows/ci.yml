@@ -1,10 +1,9 @@
-# 持续集成：静态检查 + 单测 + 模板快照一致性。
-#
-# 为什么需要：发布用的「新建项目」模板是 internal/scaffold/testdata/template 里的
-# 一份快照（脚本 scripts/snapshot-template.py 生成）。改了主工程却忘了重新快照，
-# 生成出来的新项目就是旧代码——这里用 --check 把它变成硬失败。
+# 持续集成：静态检查 + 单测。
 #
 # 与 release.yml 的分工：本文件只管「代码是否健康」，不发版、不碰 secrets。
+#
+# 注：本项目由脚手架生成，工程里**没有** internal/scaffold 与
+# scripts/snapshot-template.py（那是生成器自己的检查），所以不做模板快照校验。
 
 name: ci
 
@@ -45,10 +44,6 @@ jobs:
             echo "$out"
             exit 1
           fi
-
-      - name: 模板快照与主工程一致
-        shell: bash
-        run: python3 scripts/snapshot-template.py --check
 
   test:
     name: Test (${{ matrix.os }})

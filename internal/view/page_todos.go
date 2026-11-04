@@ -149,7 +149,7 @@ func (a *App) todoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 			kit.Pill(c, t, name, t.Accent)
 		}
 		if name := a.atlas().repoName(td.RepoID); name != "" {
-			ui.Text(c, name).FontSize(t.FontSize-2).TextColor(t.TextMuted).SingleLine()
+			ui.Text(c, name).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 		}
 		if td.Priority > 0 {
 			label, col := "中", t.Warning

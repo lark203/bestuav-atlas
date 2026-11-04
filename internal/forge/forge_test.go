@@ -1,4 +1,4 @@
-﻿package forge
+package forge
 
 import (
 	"context"

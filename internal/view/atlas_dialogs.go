@@ -81,11 +81,11 @@ type atlasUI struct {
 	// 快速添加的两个象限开关（重要 / 紧急）。
 	todoQuickImportant bool
 	todoQuickUrgent    bool
-	todoFilter        string // 全部 / 待办 / 进行中 / 已完成
-	todoProject       string // 全部项目 / 项目名
-	todoSearch        string
-	todoForm          todoForm
-	confirmTodo       int64
+	todoFilter         string // 全部 / 待办 / 进行中 / 已完成
+	todoProject        string // 全部项目 / 项目名
+	todoSearch         string
+	todoForm           todoForm
+	confirmTodo        int64
 }
 
 // repoForm 仓库编辑表单。
@@ -349,7 +349,9 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 
 		// 两个短字段并排（CrychicUI 的 FormRow 会在窄窗口里自动竖排）。
 		form.FormRow(c, []func(){
-			func() { dialogRow(c, "归属项目", func() { a.projectSelect(c, "归属项目", &a.atlasUI.importProject) }) },
+			func() {
+				dialogRow(c, "归属项目", func() { a.projectSelect(c, "归属项目", &a.atlasUI.importProject) })
+			},
 			func() {
 				dialogRow(c, "本地根目录", func() { ui.TextInput(c, &a.atlasUI.importRoot).Placeholder(a.workRoot()) })
 			},

@@ -30,11 +30,11 @@ import (
 type batchKind int
 
 const (
-	batchInspect batchKind = iota // 只读本地 git 状态
-	batchPull                     // fetch + pull --ff-only
-	batchCommitPush               // add -A + commit + push
-	batchRemote                   // 调平台 API 拉远端元信息
-	batchClone                    // 从远端克隆到本地根目录
+	batchInspect    batchKind = iota // 只读本地 git 状态
+	batchPull                        // fetch + pull --ff-only
+	batchCommitPush                  // add -A + commit + push
+	batchRemote                      // 调平台 API 拉远端元信息
+	batchClone                       // 从远端克隆到本地根目录
 )
 
 // label 动作名，用于页头进度与任务记录。

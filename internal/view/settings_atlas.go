@@ -33,7 +33,7 @@ func (a *App) workspaceSection(c *ui.Context, t *ui.Theme) {
 		}
 	})
 	ui.Text(c, "导入仓库时默认放到「根目录/owner-repo」；留空则用上面的灰字路径。").
-		TextColor(t.TextMuted).FontSize(t.FontSize - 2).Margin(0, 0, 0, 4)
+		TextColor(t.TextMuted).FontSize(t.FontSize-2).Margin(0, 0, 0, 4)
 
 	a.tokenRow(c, t, "GitHub 令牌", &a.settings.RepoToken, forgePlatforms[0],
 		"PAT：read 仓库信息；与「仓库同步」共用")
@@ -56,7 +56,7 @@ func (a *App) workspaceSection(c *ui.Context, t *ui.Theme) {
 
 	ui.Text(c, "令牌只在点按钮时使用（读取仓库列表 / 刷新远端信息 / 读 README）；"+
 		"克隆与推送走本机 git 凭据，星图不保存 git 密码。").
-		TextColor(t.TextMuted).FontSize(t.FontSize - 2).Margin(0, 0, 0, 4)
+		TextColor(t.TextMuted).FontSize(t.FontSize-2).Margin(0, 0, 0, 4)
 
 	settingRow(c, t, "GitHub 用户名", func() {
 		if ui.TextInput(c, &a.settings.RepoOwner).Width(220).
@@ -91,9 +91,9 @@ func (a *App) testPlatformToken(p forge.Platform) {
 	}
 	a.listPlatformRepos(p, "", func(names []string, err error) {
 		if err != nil {
-			a.toast(p.Label()+" 不可用："+err.Error())
+			a.toast(p.Label() + " 不可用：" + err.Error())
 			return
 		}
-		a.toast(p.Label()+" 可用，读到 " + itoa(len(names)) + " 个仓库")
+		a.toast(p.Label() + " 可用，读到 " + itoa(len(names)) + " 个仓库")
 	})
 }

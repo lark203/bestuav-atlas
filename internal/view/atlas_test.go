@@ -299,7 +299,7 @@ func TestImportReposDedup(t *testing.T) {
 		"https://gitee.com/mirrors/gin.git",
 		"lark203/bestuav-atlas", // 重复
 		"不是仓库",                  // 非法
-		"",                     // 空行
+		"",                      // 空行
 	}, 0, filepath.Join(t.TempDir(), "repos"), forge.PlatformForHost("github.com"))
 
 	if added != 3 || skipped != 2 {

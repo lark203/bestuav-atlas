@@ -1,4 +1,4 @@
-﻿// Package appmeta 集中存放应用的「产品标识」常量，供全项目统一引用。
+// Package appmeta 集中存放应用的「产品标识」常量，供全项目统一引用。
 //
 // 动机：产品名、窗口标题、配置目录名、应用唯一标识符等字符串如果散落在
 // main.go / sidebar.go / settings.go / settings_page.go 等多处各自硬编码，

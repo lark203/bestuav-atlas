@@ -255,7 +255,7 @@ func (a *App) overviewRepos(c *ui.Context, t *ui.Theme) {
 			}
 		})
 		if n := len(a.problemRepos(999)); n > 6 {
-			ui.Text(c, "另有 " + itoa(n-6) + " 个，去仓库页处理。").
+			ui.Text(c, "另有 "+itoa(n-6)+" 个，去仓库页处理。").
 				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 		}
 	})

@@ -1,4 +1,4 @@
-﻿package view
+package view
 
 import (
 	"strings"
@@ -114,7 +114,7 @@ func (a *App) repoFilterBar(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 		choice.Dropdown(c, "状态筛选", statusOpts, &u.repoStatus)
 		choice.Dropdown(c, "项目筛选", projectOpts, &u.repoProject)
 		ui.Text(c, itoa(len(rows))+" 个仓库").TextColor(t.TextMuted).
-			FontSize(t.FontSize - 2).Margin(6, 0, 0, 0)
+			FontSize(t.FontSize-2).Margin(6, 0, 0, 0)
 	})
 }
 
@@ -172,7 +172,7 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 					ui.Text(c, r.Name).SingleLine().Bold()
 					sub := firstNonEmpty(r.LocalPath, r.URL)
 					if sub != "" {
-						ui.Text(c, sub).FontSize(t.FontSize-2).TextColor(t.TextMuted).SingleLine()
+						ui.Text(c, sub).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 					}
 				})
 			case 1:
@@ -201,7 +201,7 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 					ui.Text(c, firstNonEmpty(r.LastCommit, "—")).SingleLine().FontSize(t.FontSize - 2)
 					if !r.LastCommitAt.IsZero() {
 						ui.Text(c, r.LastCommitAt.Local().Format("2006-01-02 15:04")).
-							FontSize(t.FontSize-2).TextColor(t.TextMuted).SingleLine()
+							FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 					}
 				})
 			case 8:
@@ -276,13 +276,13 @@ func (a *App) atlasBanner(c *ui.Context, t *ui.Theme, d *atlasCache) {
 			Children(func() {
 				ui.Icon(c, icons.Bell).FontSize(14).TextColor(t.Warning)
 				ui.Text(c, "本次运行不落库（安全模式或数据库不可用），改动只在内存里，退出即丢。").
-					FontSize(t.FontSize-2).TextColor(t.Warning)
+					FontSize(t.FontSize - 2).TextColor(t.Warning)
 			})
 	case d.err != nil:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(8, 12).Radius(8).
 			Background(kit.Alpha(t.Danger, 0.12)).
 			Children(func() {
-				ui.Text(c, d.err.Error()).FontSize(t.FontSize-2).TextColor(t.Danger).Grow(1)
+				ui.Text(c, d.err.Error()).FontSize(t.FontSize - 2).TextColor(t.Danger).Grow(1)
 				if ui.Button(c, "重试").Clicked() {
 					a.reloadAtlas()
 				}

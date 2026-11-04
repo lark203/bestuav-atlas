@@ -1,5 +1,17 @@
 # 变更记录
 
+## 0.3.3
+
+发版链路修复（首次推 tag 暴露的问题）。
+
+- **去掉 UTF-8 BOM**：`mygo.json` / `internal/appmeta/appmeta.go` / `internal/forge/forge_test.go` /
+  `internal/view/page_repos.go` / `internal/view/page_repo_detail.go` 曾被 Windows 编辑器写入 BOM，
+  导致发布工作流里 `json.load(open("mygo.json"))` 直接抛 `Unexpected UTF-8 BOM`；
+  `release.yml` 顺带改成 `encoding="utf-8-sig"`，以后即使再被加 BOM 也不会卡住校验。
+- **CI 去掉「模板快照一致性」校验**：本项目由脚手架生成，没有 `internal/scaffold` 与
+  `scripts/snapshot-template.py`，那一步必然失败。
+- 七个 Go 文件按 gofmt 重新格式化（CI 的 `gofmt -l` 门禁）。
+
 ## 0.3.2
 
 - **自建 Gitea 支持 http 与 https**：`Platform` 增加 `Scheme`，网页地址、克隆地址与 Gitea 的
