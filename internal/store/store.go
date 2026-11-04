@@ -37,7 +37,8 @@ import (
 //
 // 2：新增 page_pref（页面私有键值），见 internal/view/prefs.go。
 // 3：新增 project / repo / todo
-const schemaVersion = "3"
+// 4：仓库评分与评价、待办重要/紧急
+const schemaVersion = "4"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -204,6 +205,10 @@ func (s *Store) migrate() error {
 			local_path     TEXT NOT NULL DEFAULT '',
 			branch         TEXT NOT NULL DEFAULT '',
 			note           TEXT NOT NULL DEFAULT '',
+			importance     INTEGER NOT NULL DEFAULT 0,
+			learning       INTEGER NOT NULL DEFAULT 0,
+			difficulty     INTEGER NOT NULL DEFAULT 0,
+			review         TEXT NOT NULL DEFAULT '',
 			status         TEXT NOT NULL DEFAULT '未知',
 			status_msg     TEXT NOT NULL DEFAULT '',
 			dirty          INTEGER NOT NULL DEFAULT 0,
@@ -223,6 +228,8 @@ func (s *Store) migrate() error {
 			project_id INTEGER NOT NULL DEFAULT 0,
 			repo_id    INTEGER NOT NULL DEFAULT 0,
 			priority   INTEGER NOT NULL DEFAULT 1,
+			important  INTEGER NOT NULL DEFAULT 0,
+			urgent     INTEGER NOT NULL DEFAULT 0,
 			status     TEXT NOT NULL DEFAULT '待办',
 			due_at     TEXT NOT NULL DEFAULT '',
 			done_at    TEXT NOT NULL DEFAULT '',
@@ -236,6 +243,14 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("store: 初始化表结构失败: %w", err)
 		}
 	}
+	// 老库补列：CREATE TABLE IF NOT EXISTS 只对新库生效，已存在的表不会因为
+	// 建表语句里多写了列就长出新列，所以这里按「实际缺哪列补哪列」迁移一次。
+	//
+	// 必须放在写 schema_meta 版本号**之前**：否则老库的版本先被写成新版本，
+	// 下次启动就会以为已经迁移完，而表里其实还没有新列。
+	if err := s.addMissingColumns(); err != nil {
+		return err
+	}
 	// 记录版本：首次写入；已有时只在**新版本更高**时更新。
 	//
 	// 为什么不是 DO NOTHING：装了新版的用户库里会一直停在旧版本号，之后再按版本分支
@@ -248,6 +263,75 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("store: 写入 schema 版本失败: %w", err)
 	}
 	return nil
+}
+
+// addColumn 一条待补的列：name 只用于查重，def 是 ADD COLUMN 的完整定义
+// （含类型、NOT NULL 与默认值）。
+type addColumn struct {
+	name string
+	def  string
+}
+
+// addMissingColumns 给老库补上后续版本新增的列（幂等）。
+//
+// SQLite 的 ALTER TABLE ADD COLUMN 没有 IF NOT EXISTS，重复执行会报
+// "duplicate column name"，所以先用 PRAGMA table_info 查实际列名，缺了才加。
+// 这样无论是刚建的新库还是 v3 老库，跑多少遍结果都一样。
+func (s *Store) addMissingColumns() error {
+	plan := []struct {
+		table string
+		cols  []addColumn
+	}{
+		{"repo", []addColumn{
+			{"importance", `importance INTEGER NOT NULL DEFAULT 0`},
+			{"learning", `learning INTEGER NOT NULL DEFAULT 0`},
+			{"difficulty", `difficulty INTEGER NOT NULL DEFAULT 0`},
+			{"review", `review TEXT NOT NULL DEFAULT ''`},
+		}},
+		{"todo", []addColumn{
+			{"important", `important INTEGER NOT NULL DEFAULT 0`},
+			{"urgent", `urgent INTEGER NOT NULL DEFAULT 0`},
+		}},
+	}
+	for _, p := range plan {
+		existing, err := s.tableColumns(p.table)
+		if err != nil {
+			return err
+		}
+		for _, c := range p.cols {
+			if existing[c.name] {
+				continue
+			}
+			// 表名与列定义都来自本文件的常量，不拼用户输入。
+			if _, err := s.db.Exec(`ALTER TABLE ` + p.table + ` ADD COLUMN ` + c.def); err != nil {
+				return fmt.Errorf("store: 为表 %s 补列 %s 失败: %w", p.table, c.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// tableColumns 返回某张表已有的列名集合（PRAGMA table_info 的 name 列）。
+func (s *Store) tableColumns(table string) (map[string]bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return nil, fmt.Errorf("store: 读取表结构失败(%s): %w", table, err)
+	}
+	defer rows.Close()
+
+	cols := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, typ        string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, fmt.Errorf("store: 读取表结构失败(%s): %w", table, err)
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
 }
 
 // ---- 元数据 ----

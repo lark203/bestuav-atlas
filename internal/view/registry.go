@@ -40,6 +40,9 @@ type navItem struct {
 	build  pageFunc     // 页面内容（nil → 占位页）
 	hint   string       // 占位页的一句话说明
 	policy pagePolicy   // 生命周期与缓存策略（零值 = 缓存 + 默认闲置销毁）
+	// hidden 为 true 时不在侧栏出现，但照样能按 id 分发与显示页头标题。
+	// 用于「只能从别处进入的页面」（如仓库详情），避免为了一个详情页去改导航模型。
+	hidden bool
 	// settings 页面级设置项（可空）：在「设置 → 页面」里渲染成一个区块。
 	//
 	// 设置项自己用 a.PrefsFor(id) 读写页面私有状态（见 prefs.go），设置页不需要
@@ -71,6 +74,9 @@ func navRegistry() []navGroup {
 		// 研发：星图的三块核心业务。顺序即日常使用顺序——先看要做什么（待办），
 		// 再看这些事属于谁（项目），最后处理代码（仓库）。
 		{title: "研发", items: []navItem{
+			// 仓库详情：不出现在侧栏，只能从仓库行点「详情」进入（hidden）。
+			{id: "repo-detail", label: "仓库详情", icon: icons.Code, build: (*App).repoDetailPage,
+				hidden: true, policy: pagePolicy{keep: keepCached}},
 			{id: "todos", label: "待办", icon: icons.Checklist, build: (*App).todoPage,
 				policy: pagePolicy{keep: keepCached},
 				tools: []toolAction{
@@ -244,7 +250,14 @@ func navGroups() []shell.Group {
 	for _, g := range reg {
 		items := make([]shell.Item, 0, len(g.items))
 		for _, it := range g.items {
+			if it.hidden {
+				continue // 隐藏页（如仓库详情）不进行导航投影
+			}
 			items = append(items, shell.Item{ID: it.id, Label: it.label, Icon: it.icon})
+		}
+		// 分组里全是隐藏页时，整个分组也不必出现在侧栏（避免空分组标题）。
+		if len(items) == 0 && g.title != "" {
+			continue
 		}
 		out = append(out, shell.Group{Title: g.title, Items: items})
 	}

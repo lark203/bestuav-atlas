@@ -1,12 +1,15 @@
 package view
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"bestuav-atlas/internal/gitx"
 	"bestuav-atlas/internal/settings"
 	"bestuav-atlas/internal/store"
 )
@@ -46,13 +49,17 @@ func seedAtlas(t *testing.T, a *App, st *store.Store) (projectID, repoID int64) 
 		Branch:    "main",
 		Status:    RepoDirty,
 		Dirty:     3,
+		// 评分与评价：详情页与表格的星级都读这几个字段。
+		Importance: 4, Learning: 3, Difficulty: 2,
+		Review: "值得长期跟的一个项目。",
 	})
 	if err != nil {
 		t.Fatalf("建仓库失败: %v", err)
 	}
 	if _, err := st.CreateTodo(store.Todo{
 		Title: "把仓库页接上批量推送", ProjectID: projectID, RepoID: repoID,
-		Priority: 2, Status: TodoOpen, DueAt: time.Now().Add(24 * time.Hour),
+		Priority: 2, Important: true, Urgent: true, Status: TodoOpen,
+		DueAt: time.Now().Add(24 * time.Hour),
 	}); err != nil {
 		t.Fatalf("建待办失败: %v", err)
 	}
@@ -152,7 +159,7 @@ func TestDialogsRender(t *testing.T) {
 		{"项目编辑", "projects", func() { a.openProjectDialog(store.Project{}) },
 			[]string{"描述", "状态", "保存"}},
 		{"待办编辑", "todos", func() { a.openTodoDialog(store.Todo{}) },
-			[]string{"关联仓库", "优先级", "截止日", "保存"}},
+			[]string{"关联仓库", "优先级", "四象限", "截止时间", "保存"}},
 		{"批量提交", "repos", func() { a.openCommitDialog([]int64{1}) },
 			[]string{"提交说明", "提交并推送"}},
 	}
@@ -257,6 +264,140 @@ func TestImportReposDedup(t *testing.T) {
 		if r.LocalPath == "" {
 			t.Errorf("指定了根目录时本地路径不该为空：%+v", r)
 		}
+	}
+}
+
+// TestRepoDetailPage 详情页能读到本地 README、显示评分，并回填评价。
+func TestRepoDetailPage(t *testing.T) {
+	a, st := newTestApp(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"),
+		[]byte("# 演示仓库\n\n这是一段用来验证详情页渲染的说明文字。\n"), 0o644); err != nil {
+		t.Fatalf("写 README 失败: %v", err)
+	}
+	id, err := st.CreateRepo(store.Repo{
+		Name: "lark203/demo", LocalPath: dir, Status: RepoOK,
+		Importance: 5, Learning: 4, Difficulty: 1, Review: "先读 README。",
+	})
+	if err != nil {
+		t.Fatalf("建仓库失败: %v", err)
+	}
+	a.reloadAtlas()
+	r, ok := a.repoByID(id)
+	if !ok {
+		t.Fatal("仓库没读到")
+	}
+	a.openRepoDetail(r)
+
+	tt := renderPage(t, a, "repo-detail")
+	for _, want := range []string{"我的评价", "重要程度", "可学习", "难度", "这是一段用来验证详情页渲染的说明文字。"} {
+		if !tt.HasText(want) {
+			t.Errorf("详情页缺少 %q；实际文本：%v", want, tt.Texts())
+		}
+	}
+	// 评分表单应回填库里的值。
+	if a.atlasUI.detailImport != 5 || a.atlasUI.detailLearn != 4 || a.atlasUI.detailDiff != 1 {
+		t.Errorf("评分未回填：%+v", a.atlasUI)
+	}
+	if a.atlasUI.detailReview != "先读 README。" {
+		t.Errorf("评价未回填：%q", a.atlasUI.detailReview)
+	}
+}
+
+// TestImportLocalRepos 从本地文件夹导入：远端地址决定名字，状态自动探测。
+func TestImportLocalRepos(t *testing.T) {
+	if !gitx.HasGit() {
+		t.Skip("本机没有 git")
+	}
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-b", "main")
+	git("config", "user.name", "atlas-test")
+	git("config", "user.email", "atlas@example.com")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-m", "init")
+	git("remote", "add", "origin", "https://github.com/lark203/demo-repo.git")
+
+	a, _ := newTestApp(t)
+	added, skipped, firstSkip := a.importLocalRepos([]string{dir}, 0)
+	if added != 1 || skipped != 0 {
+		t.Fatalf("导入结果不对：added=%d skipped=%d (%s)", added, skipped, firstSkip)
+	}
+	repos, err := a.store.ListRepos()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 {
+		t.Fatalf("库里应有 1 个仓库，实际 %d", len(repos))
+	}
+	r := repos[0]
+	if r.Name != "lark203/demo-repo" {
+		t.Errorf("名字应从 origin 解析，实际 %q", r.Name)
+	}
+	if r.LocalPath != dir {
+		t.Errorf("本地目录不对：%q", r.LocalPath)
+	}
+	if r.Branch != "main" || r.Status != RepoOK {
+		t.Errorf("分支/状态不对：branch=%q status=%q", r.Branch, r.Status)
+	}
+
+	// 再导一次应该被「已在列表里」挡掉。
+	added2, skipped2, _ := a.importLocalRepos([]string{dir}, 0)
+	if added2 != 0 || skipped2 != 1 {
+		t.Errorf("重复导入应被跳过：added=%d skipped=%d", added2, skipped2)
+	}
+}
+
+// TestQuadrantAndCountdown 四象限归类与倒计时文案。
+func TestQuadrantAndCountdown(t *testing.T) {
+	cases := []struct {
+		important, urgent bool
+		want              int
+	}{
+		{true, true, 1}, {true, false, 2}, {false, true, 3}, {false, false, 4},
+	}
+	for _, tc := range cases {
+		got := quadrantOf(store.Todo{Important: tc.important, Urgent: tc.urgent})
+		if got != tc.want {
+			t.Errorf("象限(%v,%v)=%d，期望 %d", tc.important, tc.urgent, got, tc.want)
+		}
+	}
+
+	if s, overdue := countdownText(time.Now().Add(90 * time.Minute)); overdue || s == "" {
+		t.Errorf("未到期应显示剩余时间，实际 %q overdue=%v", s, overdue)
+	}
+	if s, overdue := countdownText(time.Now().Add(-2 * time.Hour)); !overdue || s == "" {
+		t.Errorf("已过期应显示逾期，实际 %q overdue=%v", s, overdue)
+	}
+	if s, _ := countdownText(time.Time{}); s != "" {
+		t.Errorf("无期限应返回空串，实际 %q", s)
+	}
+}
+
+// TestParseDueDate 截止时间支持「日期 + 时刻」。
+func TestParseDueDate(t *testing.T) {
+	withTime, err := parseDueDate("2026-11-30 18:30")
+	if err != nil {
+		t.Fatalf("带时刻解析失败: %v", err)
+	}
+	if withTime.Hour() != 18 || withTime.Minute() != 30 {
+		t.Errorf("时刻没解析出来：%v", withTime)
+	}
+	if _, err := parseDueDate("2026-11-30"); err != nil {
+		t.Errorf("纯日期应可解析: %v", err)
+	}
+	if _, err := parseDueDate("下周一"); err == nil {
+		t.Error("无法识别的写法应报错")
 	}
 }
 

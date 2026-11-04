@@ -279,7 +279,119 @@ func (a *App) filteredRepos() []store.Repo {
 	return out
 }
 
-// ---- 批量导入 ----
+// ---- 本地文件夹导入 ----
+
+// pickLocalRepos 弹出系统文件夹选择框（可多选），把选中的目录解析成仓库登记。
+//
+// 解析完全靠本地信息：`.git/config` 里的 origin 地址决定名字，当前分支与
+// ahead/behind 由 gitx.Inspect 读出。没有远端地址（纯本地仓库）时用文件夹名，
+// 这类仓库仍然能看状态、能提交，只是「在 GitHub 打开」会没有链接。
+func (a *App) pickLocalRepos(projectID int64) {
+	if a.store == nil {
+		a.toast("本次运行不落库，无法导入")
+		return
+	}
+	// 在起协程之前读窗口句柄：协程里读 a.win 属于跨线程读 App 状态。
+	parent := a.win
+	a.atlasUI.busy = true
+	go func() {
+		defer logging.Recover("atlas-pick-local")
+		dirs, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:      parent,
+			Title:       "选择本地仓库文件夹",
+			ButtonLabel: "导入",
+			Directory:   true,
+			Multiple:    true,
+		})
+		mygo.RunOnMain(func() {
+			a.atlasUI.busy = false
+			switch {
+			case err != nil:
+				logging.Errv("atlas", "选择本地文件夹失败", err)
+				a.toast("打开文件夹选择框失败：" + err.Error())
+			case len(dirs) == 0:
+				// 取消：什么都不做，弹窗保持打开，用户可以继续贴地址。
+			default:
+				added, skipped, firstSkip := a.importLocalRepos(dirs, projectID)
+				msg := "已从本地导入 " + itoa(added) + " 个仓库"
+				if skipped > 0 {
+					msg += "，跳过 " + itoa(skipped) + " 个"
+					if firstSkip != "" {
+						msg += "（" + firstSkip + "）"
+					}
+				}
+				a.toast(msg)
+				if added > 0 {
+					a.closeAtlasDialog()
+				}
+			}
+			a.requestFrame()
+		})
+	}()
+}
+
+// importLocalRepos 解析并登记一批本地目录；返回成功数、跳过数与第一条跳过原因。
+func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped int, firstSkip string) {
+	d := a.atlas()
+	byPath := make(map[string]bool, len(d.repos))
+	byName := make(map[string]bool, len(d.repos))
+	for _, r := range d.repos {
+		byPath[strings.ToLower(filepath.Clean(r.LocalPath))] = true
+		byName[strings.ToLower(r.Name)] = true
+	}
+	skip := func(reason string) {
+		skipped++
+		if firstSkip == "" {
+			firstSkip = reason
+		}
+	}
+	for _, dir := range dirs {
+		dir = filepath.Clean(strings.TrimSpace(dir))
+		if byPath[strings.ToLower(dir)] {
+			skip(filepath.Base(dir) + "：已在列表里")
+			continue
+		}
+		st := gitx.Inspect(dir)
+		if !st.IsRepo {
+			skip(filepath.Base(dir) + "：不是 git 仓库")
+			continue
+		}
+		name := ""
+		if owner, repo, ok := github.ParseRemote(st.RemoteURL); ok {
+			name = owner + "/" + repo
+		}
+		if name == "" {
+			name = filepath.Base(dir)
+		}
+		if byName[strings.ToLower(name)] {
+			skip(name + "：同名仓库已存在")
+			continue
+		}
+		r := a.inspectRepo(store.Repo{
+			ProjectID: projectID,
+			Name:      name,
+			URL:       st.RemoteURL,
+			LocalPath: dir,
+			Branch:    st.Branch,
+			Status:    RepoUnknown,
+		})
+		if r.URL == "" {
+			r.URL = githubURLOf(name)
+		}
+		if _, err := a.store.CreateRepo(r); err != nil {
+			logging.Errv("atlas", "导入本地仓库失败", err, "dir", dir)
+			skip(filepath.Base(dir) + "：写库失败")
+			continue
+		}
+		byPath[strings.ToLower(dir)] = true
+		byName[strings.ToLower(name)] = true
+		added++
+	}
+	a.reloadAtlas()
+	return added, skipped, firstSkip
+}
+
+// ---- 远程批量导入 ----
 
 // importRepos 把一批「owner/repo」或仓库地址登记进库。
 //

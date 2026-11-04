@@ -42,6 +42,30 @@ func TestScreenshots(t *testing.T) {
 	}
 	a.reloadAtlas()
 
+	// 详情页：把第一个仓库指到有 README 的本地目录，并补上评分与评价。
+	readmeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(readmeDir, "README.md"), []byte(
+		"# bestuav-atlas\n\n"+
+			"把「待办 / 项目 / 多个 GitHub 仓库」摊在一张图上的本地桌面工作台。\n\n"+
+			"## 功能\n\n"+
+			"- 待办：倒计时、重要 / 紧急、四象限\n"+
+			"- 项目：仓库与待办的归属单位\n"+
+			"- 仓库：本地与远程导入、五星评分、README 只读浏览\n"), 0o644); err != nil {
+		t.Fatalf("写 README 失败: %v", err)
+	}
+	repos, err := st.ListRepos()
+	if err != nil || len(repos) == 0 {
+		t.Fatalf("读仓库失败: %v", err)
+	}
+	detail := repos[0]
+	detail.LocalPath = readmeDir
+	detail.Importance, detail.Learning, detail.Difficulty = 5, 4, 2
+	detail.Review = "主工程：桌面端骨架 + 业务页都在这里，值得反复读它的 shell 分层写法。"
+	if err := st.UpdateRepo(detail); err != nil {
+		t.Fatalf("更新仓库失败: %v", err)
+	}
+	a.reloadAtlas()
+
 	save := func(name string) {
 		tt := renderPage(t, a, a.page)
 		img := tt.Image()
@@ -61,6 +85,12 @@ func TestScreenshots(t *testing.T) {
 	for _, page := range []string{"home", "todos", "projects", "repos"} {
 		a.page = page
 		save("atlas-" + page)
+	}
+
+	// 仓库详情页。
+	if r, ok := a.repoByID(detail.ID); ok {
+		a.openRepoDetail(r)
+		save("atlas-repo-detail")
 	}
 
 	// 两个弹窗：导入与批量提交。

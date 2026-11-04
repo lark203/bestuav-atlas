@@ -64,12 +64,102 @@ func (a *App) overviewPage(c *ui.Context, t *ui.Theme) {
 		}
 
 		// ---- 待办 + 仓库两栏 ----
-		// 不设 AlignItems(Start)：让两栏里的卡片拉伸到同高，右栏只有两行时也不会
-		// 比左栏矮半截（视觉上像没画完）。
-		ui.Row(c).Gap(kit.RowGap).Children(func() {
+		// Stretch：两栏卡片拉到同高；否则 Row 默认垂直居中，短的那张会浮在中间。
+		ui.Row(c).Gap(kit.RowGap).AlignItems(ui.Stretch).Children(func() {
 			ui.Column(c).Grow(2).Children(func() { a.overviewTodos(c, t) })
 			ui.Column(c).Grow(1).Children(func() { a.overviewRepos(c, t) })
 		})
+
+		// ---- 四象限 ----
+		a.quadrantsCard(c, t)
+	})
+}
+
+// quadrantDefs 四象限的标题、做事原则与配色。
+var quadrantDefs = [4]struct {
+	Title string
+	Hint  string
+}{
+	{"重要且紧急", "马上做"},
+	{"重要不紧急", "排进计划"},
+	{"紧急不重要", "尽快清掉"},
+	{"不紧急不重要", "有空再说"},
+}
+
+// quadrantsCard 艾森豪威尔四象限：用「重要 × 紧急」把未完成待办分到四格。
+//
+// 为什么放在首页最下方：它是「今天怎么排」的总览，看完今日待办与仓库之后，
+// 再把没排上的事分个优先级——顺序上刚好是从「具体」到「取舍」。
+func (a *App) quadrantsCard(c *ui.Context, t *ui.Theme) {
+	var groups [4][]store.Todo
+	for _, td := range a.atlas().sortedTodos() {
+		if td.Status == TodoDone {
+			continue
+		}
+		q := quadrantOf(td) - 1
+		groups[q] = append(groups[q], td)
+	}
+
+	kit.Card(c, t, func() {
+		kit.CardHeader(c, t, "四象限",
+			"重要 × 紧急。先做左上；右上（重要不紧急）是长期价值，别让它一直拖成左上。", nil)
+		kit.RowGrid(c, 2, func() {
+			for i := range quadrantDefs {
+				a.quadrantCell(c, t, i, groups[i])
+			}
+		})
+	})
+}
+
+// quadrantCell 一个象限格子：标题 + 数量 + 至多四条待办。
+func (a *App) quadrantCell(c *ui.Context, t *ui.Theme, i int, todos []store.Todo) {
+	def := quadrantDefs[i]
+	col := []ui.Color{t.Danger, t.Accent, t.Warning, t.TextMuted}[i]
+
+	ui.Column(c).Gap(6).Padding(12).Radius(8).
+		Background(kit.Alpha(col, 0.07)).Border(1, kit.Alpha(col, 0.22)).
+		Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, def.Title).Bold().TextColor(col).SingleLine()
+				ui.Text(c, itoa(len(todos))).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+				ui.Text(c, "").Grow(1)
+				ui.Text(c, def.Hint).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+			})
+			if len(todos) == 0 {
+				kit.EmptyHint(c, t, "这一格是空的")
+				return
+			}
+			// 每格最多四条：象限是「一眼看清轻重」，不是第二张待办列表。
+			limit := len(todos)
+			if limit > 4 {
+				limit = 4
+			}
+			for _, td := range todos[:limit] {
+				a.quadrantTodoRow(c, t, td)
+			}
+			if len(todos) > 4 {
+				ui.Text(c, "还有 "+itoa(len(todos)-4)+" 条，去待办页看").
+					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+			}
+		})
+}
+
+// quadrantTodoRow 四象限里的一行待办：勾选 + 标题 + 倒计时。
+func (a *App) quadrantTodoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
+	done := td.Status == TodoDone
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(3, 2).Children(func() {
+		check := ui.Checkbox(c, &done, "")
+		if check.Changed() && done {
+			a.setTodoStatus(td.ID, TodoDone)
+		}
+		ui.Text(c, td.Title).Grow(1).SingleLine().FontSize(t.FontSize - 2)
+		if label, overdue := countdownText(td.DueAt); label != "" {
+			col := t.TextMuted
+			if overdue {
+				col = t.Danger
+			}
+			ui.Text(c, label).FontSize(t.FontSize - 2).TextColor(col).SingleLine()
+		}
 	})
 }
 
@@ -125,15 +215,15 @@ func (a *App) overviewTodoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 		if name := a.atlas().projectName(td.ProjectID); name != "" {
 			kit.Pill(c, t, name, t.Accent)
 		}
-		if label, overdue := dueText(td.DueAt); label != "" {
+		if label, overdue := countdownText(td.DueAt); label != "" {
 			col := t.TextMuted
 			if overdue {
 				col = t.Danger
 			}
 			ui.Text(c, label).FontSize(t.FontSize - 2).TextColor(col).SingleLine()
 		}
-		if td.Priority >= 2 {
-			kit.Pill(c, t, "高", t.Danger)
+		if td.Important {
+			kit.Pill(c, t, "重要", t.Danger)
 		}
 	})
 }

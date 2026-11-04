@@ -25,16 +25,26 @@ import (
 
 // repoCols 仓库表的列。
 //
-// 固定的「状态/差异/操作」给足宽度，其余一律让位给仓库名——名字被截成
+// 固定的「状态/评分/差异/操作」给足宽度，其余一律让位给仓库名——名字被截成
 // 「lark203/bestu…」时两张行看起来一模一样，那才是真的难用。
 var repoCols = []data.Column{
-	{Title: "仓库", Width: 250},
+	{Title: "仓库", Width: 240},
 	{Title: "项目", Width: 90},
-	{Title: "分支", Width: 80},
+	{Title: "分支", Width: 76},
 	{Title: "状态", Width: 96},
-	{Title: "差异", Width: 84},
+	{Title: "评分", Width: 84},
+	{Title: "差异", Width: 80},
 	{Title: "最近提交"},
-	{Title: "操作", Width: 170, End: true},
+	{Title: "操作", Width: 200, End: true},
+}
+
+// ratingStars 把 0–5 的评分画成五颗星（0 分显示「—」，表示还没评）。
+func ratingStars(n int) string {
+	n = clampRating(n)
+	if n == 0 {
+		return "—"
+	}
+	return strings.Repeat("★", n) + strings.Repeat("☆", 5-n)
 }
 
 // repoPage 仓库页。
@@ -174,8 +184,12 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 					pill.Tooltip(r.StatusMsg)
 				}
 			case 4:
-				ui.Text(c, repoDiffText(r)).FontSize(t.FontSize - 2).SingleLine().TextColor(t.TextMuted)
+				stars := ui.Text(c, ratingStars(r.Importance)).
+					FontSize(t.FontSize - 2).TextColor(t.Warning).SingleLine()
+				stars.Tooltip("重要 " + itoa(r.Importance) + " · 可学习 " + itoa(r.Learning) + " · 难度 " + itoa(r.Difficulty))
 			case 5:
+				ui.Text(c, repoDiffText(r)).FontSize(t.FontSize - 2).SingleLine().TextColor(t.TextMuted)
+			case 6:
 				ui.Column(c).Gap(1).Children(func() {
 					ui.Text(c, firstNonEmpty(r.LastCommit, "—")).SingleLine().FontSize(t.FontSize - 2)
 					if !r.LastCommitAt.IsZero() {
@@ -183,8 +197,11 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 							FontSize(t.FontSize-2).TextColor(t.TextMuted).SingleLine()
 					}
 				})
-			case 6:
+			case 7:
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
+					if smallButton(c, "详情").Clicked() {
+						a.openRepoDetail(r)
+					}
 					if smallButton(c, "拉取").Clicked() {
 						a.runRepoBatch(batchPull, []int64{r.ID}, "")
 					}

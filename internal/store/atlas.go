@@ -29,13 +29,19 @@ type Project struct {
 
 // Repo 一个被纳管的代码仓库及其最近一次检查结果。
 type Repo struct {
-	ID           int64
-	ProjectID    int64
-	Name         string // 展示名，通常 owner/repo
-	URL          string
-	LocalPath    string
-	Branch       string // 期望分支，空=跟随当前
-	Note         string
+	ID        int64
+	ProjectID int64
+	Name      string // 展示名，通常 owner/repo
+	URL       string
+	LocalPath string
+	Branch    string // 期望分支，空=跟随当前
+	Note      string
+	// 评分（0–5 星，0 表示未评）：重要程度 / 可学习性 / 难度。
+	Importance int
+	Learning   int
+	Difficulty int
+	// Review 用户的评价正文（纯文本或 Markdown，原样存取）。
+	Review       string
 	Status       string // 正常/待提交/待推送/需要更新/未克隆/错误/未知
 	StatusMsg    string
 	Dirty        int
@@ -55,7 +61,10 @@ type Todo struct {
 	Note      string
 	ProjectID int64
 	RepoID    int64
-	Priority  int       // 0 低 / 1 中 / 2 高
+	Priority  int // 0 低 / 1 中 / 2 高
+	// Important / Urgent 是艾森豪威尔四象限的两个轴：重要 × 紧急。
+	Important bool
+	Urgent    bool
 	Status    string    // 待办 / 进行中 / 已完成
 	DueAt     time.Time // 零值 = 无期限
 	DoneAt    time.Time
@@ -69,11 +78,12 @@ type Todo struct {
 // project 的 "desc" 带双引号：DESC 是 SQLite 关键字。
 const (
 	projectColumns = `id, name, "desc", status, created_at, updated_at`
-	repoColumns    = `id, project_id, name, url, local_path, branch, note, status,
-		status_msg, dirty, ahead, behind, last_commit, last_commit_at,
+	repoColumns    = `id, project_id, name, url, local_path, branch, note,
+		importance, learning, difficulty, review,
+		status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
 		checked_at, created_at, updated_at`
-	todoColumns = `id, title, note, project_id, repo_id, priority, status,
-		due_at, done_at, created_at, updated_at`
+	todoColumns = `id, title, note, project_id, repo_id, priority, important, urgent,
+		status, due_at, done_at, created_at, updated_at`
 )
 
 // rowScanner 让 QueryRow 与 Rows 共用同一套扫描逻辑。
@@ -108,7 +118,8 @@ func scanRepo(r rowScanner) (Repo, error) {
 	var x Repo
 	var lastCommitAt, checkedAt, created, updated string
 	if err := r.Scan(&x.ID, &x.ProjectID, &x.Name, &x.URL, &x.LocalPath, &x.Branch,
-		&x.Note, &x.Status, &x.StatusMsg, &x.Dirty, &x.Ahead, &x.Behind,
+		&x.Note, &x.Importance, &x.Learning, &x.Difficulty, &x.Review,
+		&x.Status, &x.StatusMsg, &x.Dirty, &x.Ahead, &x.Behind,
 		&x.LastCommit, &lastCommitAt, &checkedAt, &created, &updated); err != nil {
 		return Repo{}, err
 	}
@@ -123,7 +134,7 @@ func scanTodo(r rowScanner) (Todo, error) {
 	var t Todo
 	var due, done, created, updated string
 	if err := r.Scan(&t.ID, &t.Title, &t.Note, &t.ProjectID, &t.RepoID,
-		&t.Priority, &t.Status, &due, &done, &created, &updated); err != nil {
+		&t.Priority, &t.Important, &t.Urgent, &t.Status, &due, &done, &created, &updated); err != nil {
 		return Todo{}, err
 	}
 	t.DueAt = parseTime(due)
@@ -289,12 +300,14 @@ func (s *Store) CreateRepo(r Repo) (int64, error) {
 	}
 	now := nowText()
 	res, err := s.db.Exec(
-		`INSERT INTO repo(project_id, name, url, local_path, branch, note, status,
-		                  status_msg, dirty, ahead, behind, last_commit, last_commit_at,
+		`INSERT INTO repo(project_id, name, url, local_path, branch, note,
+		                  importance, learning, difficulty, review,
+		                  status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
 		                  checked_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ProjectID, r.Name, r.URL, r.LocalPath, r.Branch, r.Note, r.Status, r.StatusMsg,
-		r.Dirty, r.Ahead, r.Behind, r.LastCommit, timeText(r.LastCommitAt),
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ProjectID, r.Name, r.URL, r.LocalPath, r.Branch, r.Note,
+		r.Importance, r.Learning, r.Difficulty, r.Review,
+		r.Status, r.StatusMsg, r.Dirty, r.Ahead, r.Behind, r.LastCommit, timeText(r.LastCommitAt),
 		timeText(r.CheckedAt), now, now)
 	if err != nil {
 		return 0, fmt.Errorf("store: 写入仓库失败: %w", err)
@@ -315,11 +328,13 @@ func (s *Store) UpdateRepo(r Repo) error {
 	}
 	_, err := s.db.Exec(
 		`UPDATE repo SET project_id = ?, name = ?, url = ?, local_path = ?, branch = ?,
-		        note = ?, status = ?, status_msg = ?, dirty = ?, ahead = ?, behind = ?,
+		        note = ?, importance = ?, learning = ?, difficulty = ?, review = ?,
+		        status = ?, status_msg = ?, dirty = ?, ahead = ?, behind = ?,
 		        last_commit = ?, last_commit_at = ?, checked_at = ?, updated_at = ?
 		  WHERE id = ?`,
-		r.ProjectID, r.Name, r.URL, r.LocalPath, r.Branch, r.Note, r.Status, r.StatusMsg,
-		r.Dirty, r.Ahead, r.Behind, r.LastCommit, timeText(r.LastCommitAt),
+		r.ProjectID, r.Name, r.URL, r.LocalPath, r.Branch, r.Note,
+		r.Importance, r.Learning, r.Difficulty, r.Review,
+		r.Status, r.StatusMsg, r.Dirty, r.Ahead, r.Behind, r.LastCommit, timeText(r.LastCommitAt),
 		timeText(r.CheckedAt), nowText(), r.ID)
 	if err != nil {
 		return fmt.Errorf("store: 更新仓库失败: %w", err)
@@ -354,6 +369,37 @@ func (s *Store) SaveRepoStatus(id int64, st Repo) error {
 		st.LastCommit, timeText(st.LastCommitAt), timeText(st.CheckedAt), nowText(), id)
 	if err != nil {
 		return fmt.Errorf("store: 保存仓库状态失败: %w", err)
+	}
+	return nil
+}
+
+// SaveRepoReview 只更新评分与评价（详情页保存用），其余字段一概不动。
+//
+// 和 SaveRepoStatus 同理：详情页拿到的只是「评分 + 评价」这一小块，若走
+// UpdateRepo 全量覆盖，会把定时检查刚写入的 status / checked_at 冲成旧快照。
+// 评分越界在写库前拒绝——0 表示未评，-1 与 6 都是没有意义的脏数据。
+func (s *Store) SaveRepoReview(id int64, importance, learning, difficulty int, review string) error {
+	if id <= 0 {
+		return fmt.Errorf("store: 保存仓库评价缺少有效 id")
+	}
+	for _, v := range []struct {
+		name string
+		val  int
+	}{
+		{"重要程度", importance},
+		{"可学习性", learning},
+		{"难度", difficulty},
+	} {
+		if v.val < 0 || v.val > 5 {
+			return fmt.Errorf("store: 仓库%s评分必须在 0–5 之间，实际 %d", v.name, v.val)
+		}
+	}
+	_, err := s.db.Exec(
+		`UPDATE repo SET importance = ?, learning = ?, difficulty = ?, review = ?, updated_at = ?
+		  WHERE id = ?`,
+		importance, learning, difficulty, review, nowText(), id)
+	if err != nil {
+		return fmt.Errorf("store: 保存仓库评价失败: %w", err)
 	}
 	return nil
 }
@@ -413,10 +459,10 @@ func (s *Store) CreateTodo(t Todo) (int64, error) {
 	}
 	now := nowText()
 	res, err := s.db.Exec(
-		`INSERT INTO todo(title, note, project_id, repo_id, priority, status,
+		`INSERT INTO todo(title, note, project_id, repo_id, priority, important, urgent, status,
 		                  due_at, done_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Status,
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent, t.Status,
 		timeText(t.DueAt), timeText(t.DoneAt), now, now)
 	if err != nil {
 		return 0, fmt.Errorf("store: 写入待办失败: %w", err)
@@ -437,10 +483,10 @@ func (s *Store) UpdateTodo(t Todo) error {
 	}
 	_, err := s.db.Exec(
 		`UPDATE todo SET title = ?, note = ?, project_id = ?, repo_id = ?, priority = ?,
-		        status = ?, due_at = ?, done_at = ?, updated_at = ?
+		        important = ?, urgent = ?, status = ?, due_at = ?, done_at = ?, updated_at = ?
 		  WHERE id = ?`,
-		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Status,
-		timeText(t.DueAt), timeText(t.DoneAt), nowText(), t.ID)
+		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent,
+		t.Status, timeText(t.DueAt), timeText(t.DoneAt), nowText(), t.ID)
 	if err != nil {
 		return fmt.Errorf("store: 更新待办失败: %w", err)
 	}

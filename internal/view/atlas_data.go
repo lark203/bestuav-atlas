@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"bestuav-atlas/internal/gitx"
@@ -471,6 +472,59 @@ func dueText(t time.Time) (string, bool) {
 	}
 }
 
+// countdownText 距截止时间还有多久 / 已逾期多久；零值时间返回空串。
+//
+// 与 dueText 的分工：dueText 说「哪天到期」（给人排期用），countdown 说
+// 「还剩多久」（给人紧迫感用）。四象限与待办列表用后者。
+func countdownText(t time.Time) (string, bool) {
+	if t.IsZero() {
+		return "", false
+	}
+	d := time.Until(t)
+	overdue := d < 0
+	if overdue {
+		d = -d
+	}
+	text := "剩 " + durationText(d)
+	if overdue {
+		text = "逾期 " + durationText(d)
+	}
+	return text, overdue
+}
+
+// durationText 把时长写成「3天4小时 / 5小时 / 12分钟」。
+func durationText(d time.Duration) string {
+	switch {
+	case d >= 24*time.Hour:
+		days := int(d.Hours()) / 24
+		hours := int(d.Hours()) % 24
+		return fmt.Sprintf("%d天%dh", days, hours)
+	case d >= time.Hour:
+		return fmt.Sprintf("%d小时", int(d.Hours()))
+	default:
+		m := int(d.Minutes())
+		if m < 1 {
+			m = 1
+		}
+		return fmt.Sprintf("%d分钟", m)
+	}
+}
+
+// quadrantOf 待办落在四象限的哪一格：1 重要且紧急 / 2 重要不紧急 /
+// 3 紧急不重要 / 4 都不。这一套编号在首页与待办页共用。
+func quadrantOf(td store.Todo) int {
+	switch {
+	case td.Important && td.Urgent:
+		return 1
+	case td.Important:
+		return 2
+	case td.Urgent:
+		return 3
+	default:
+		return 4
+	}
+}
+
 // sameDay 判断两个时刻是否同一天（本地时区）。
 func sameDay(a, b time.Time) bool {
 	ay, am, ad := a.Local().Date()
@@ -507,6 +561,17 @@ func openLocalPath(path string) error {
 	}
 	go func() { _ = cmd.Wait() }()
 	return nil
+}
+
+// openExternalURL 用系统默认浏览器打开链接（仓库的 GitHub 页面等）。
+func openExternalURL(url string) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	if err := mygo.Shell.OpenExternal(url); err != nil {
+		logging.Errv("atlas", "打开链接失败", err, "url", url)
+	}
 }
 
 // workRoot 仓库默认所在的根目录：设置里为空时落到用户主目录下的 atlas-repos。

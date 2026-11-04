@@ -1,8 +1,12 @@
 package store
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite" // 老库升级用例需要手工建库，直接用同一个驱动
 )
 
 // testInstant 固定时间点（带纳秒），用来验证时间往返不丢精度。
@@ -630,6 +634,413 @@ func TestAtlasStats(t *testing.T) {
 	if st != want {
 		t.Errorf("统计错误:\n got=%+v\nwant=%+v", st, want)
 	}
+}
+
+// TestRepoReviewRoundTrip 评分/评价四个新列的往返：新建、单条读回、列表读回、
+// 按项目过滤与整条更新都要带上；review 里的换行与中文必须原样存取。
+func TestRepoReviewRoundTrip(t *testing.T) {
+	s := openTemp(t)
+
+	const review = "整体不错：\n- 结构清晰\n- 注释到位\n\n下一步补测试。"
+
+	pID, err := s.CreateProject(Project{Name: "无人机平台"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.CreateRepo(Repo{
+		ProjectID:  pID,
+		Name:       "bestuav/atlas",
+		LocalPath:  `D:\code\atlas`,
+		Branch:     "main",
+		Note:       "主仓库",
+		Importance: 5,
+		Learning:   4,
+		Difficulty: 3,
+		Review:     review,
+		Status:     "正常",
+	})
+	if err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+
+	assertReview := func(t *testing.T, r Repo) {
+		t.Helper()
+		if r.Importance != 5 || r.Learning != 4 || r.Difficulty != 3 || r.Review != review {
+			t.Errorf("评分/评价丢失: %+v", r)
+		}
+	}
+
+	got, ok, err := s.RepoByID(id)
+	if err != nil || !ok {
+		t.Fatalf("RepoByID: ok=%v err=%v", ok, err)
+	}
+	assertReview(t, got)
+
+	list, err := s.ListRepos()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListRepos: n=%d err=%v", len(list), err)
+	}
+	assertReview(t, list[0])
+
+	byProject, err := s.ReposByProject(pID)
+	if err != nil || len(byProject) != 1 {
+		t.Fatalf("ReposByProject: n=%d err=%v", len(byProject), err)
+	}
+	assertReview(t, byProject[0])
+
+	// 整条更新同样要写到这四个列。
+	got.Importance, got.Learning, got.Difficulty = 1, 2, 0
+	got.Review = "改过的评价：\n第二行"
+	if err := s.UpdateRepo(got); err != nil {
+		t.Fatalf("UpdateRepo: %v", err)
+	}
+	after, _, err := s.RepoByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Importance != 1 || after.Learning != 2 || after.Difficulty != 0 ||
+		after.Review != "改过的评价：\n第二行" {
+		t.Errorf("更新未写到评分/评价列: %+v", after)
+	}
+}
+
+// TestSaveRepoReviewOnlyTouchesReview 详情页保存只动评分与评价这 4 列：
+// name/path/branch/note/project/status 等人工与状态字段一概不能被冲掉，
+// created_at 保持，updated_at 刷新。
+func TestSaveRepoReviewOnlyTouchesReview(t *testing.T) {
+	s := openTemp(t)
+
+	id, err := s.CreateRepo(Repo{
+		ProjectID:  5,
+		Name:       "bestuav/atlas",
+		URL:        "https://example.com/bestuav/atlas.git",
+		LocalPath:  `D:\code\atlas`,
+		Branch:     "main",
+		Note:       "别动我",
+		Status:     "待推送",
+		StatusMsg:  "领先 3 个提交",
+		Dirty:      1,
+		Ahead:      3,
+		Behind:     2,
+		LastCommit: "abc1234 修复登录",
+		Importance: 1,
+		Learning:   1,
+		Difficulty: 1,
+		Review:     "旧评价",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, ok, err := s.RepoByID(id)
+	if err != nil || !ok {
+		t.Fatalf("RepoByID: ok=%v err=%v", ok, err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	review := "新评价：\n- 第一条\n- 第二条"
+	if err := s.SaveRepoReview(id, 5, 4, 3, review); err != nil {
+		t.Fatalf("SaveRepoReview: %v", err)
+	}
+
+	got, ok, err := s.RepoByID(id)
+	if err != nil || !ok {
+		t.Fatalf("RepoByID: ok=%v err=%v", ok, err)
+	}
+	if got.Importance != 5 || got.Learning != 4 || got.Difficulty != 3 || got.Review != review {
+		t.Errorf("评分/评价未更新: %+v", got)
+	}
+	// 其余列一概不动。
+	if got.ProjectID != before.ProjectID || got.Name != before.Name || got.URL != before.URL ||
+		got.LocalPath != before.LocalPath || got.Branch != before.Branch || got.Note != before.Note ||
+		got.Status != before.Status || got.StatusMsg != before.StatusMsg ||
+		got.Dirty != before.Dirty || got.Ahead != before.Ahead || got.Behind != before.Behind ||
+		got.LastCommit != before.LastCommit || !got.LastCommitAt.Equal(before.LastCommitAt) ||
+		!got.CheckedAt.Equal(before.CheckedAt) {
+		t.Errorf("SaveRepoReview 不应改动其他列:\nbefore=%+v\n after=%+v", before, got)
+	}
+	if !got.CreatedAt.Equal(before.CreatedAt) {
+		t.Errorf("不应改 created_at: before=%v after=%v", before.CreatedAt, got.CreatedAt)
+	}
+	if !got.UpdatedAt.After(before.UpdatedAt) {
+		t.Errorf("应刷新 updated_at: before=%v after=%v", before.UpdatedAt, got.UpdatedAt)
+	}
+}
+
+// TestSaveRepoReviewValidation 评分越界直接拒绝且不写库；0 与 5 是合法边界。
+func TestSaveRepoReviewValidation(t *testing.T) {
+	s := openTemp(t)
+
+	id, err := s.CreateRepo(Repo{
+		Name:       "bestuav/atlas",
+		Importance: 2,
+		Learning:   3,
+		Difficulty: 4,
+		Review:     "原评价",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bad := []struct {
+		reason                           string
+		importance, learning, difficulty int
+	}{
+		{"重要程度为 -1", -1, 3, 4},
+		{"重要程度为 6", 6, 3, 4},
+		{"可学习性为 -1", 2, -1, 4},
+		{"可学习性为 6", 2, 6, 4},
+		{"难度为 -1", 2, 3, -1},
+		{"难度为 6", 2, 3, 6},
+	}
+	for _, b := range bad {
+		if err := s.SaveRepoReview(id, b.importance, b.learning, b.difficulty, "不该写进去"); err == nil {
+			t.Errorf("%s：应返回错误", b.reason)
+		}
+	}
+	got, _, _ := s.RepoByID(id)
+	if got.Importance != 2 || got.Learning != 3 || got.Difficulty != 4 || got.Review != "原评价" {
+		t.Errorf("越界被拒后不应写库: %+v", got)
+	}
+	if err := s.SaveRepoReview(0, 0, 0, 0, ""); err == nil {
+		t.Error("id<=0 应被拒绝")
+	}
+	if err := s.SaveRepoReview(id, 0, 5, 0, ""); err != nil {
+		t.Errorf("0 与 5 应视为合法评分: %v", err)
+	}
+}
+
+// TestTodoQuadrant 重要/紧急的往返与艾森豪威尔四象限的四种组合：
+// 落库是 0/1 整数，读回是 bool；新建、列表、更新三条路径都要带上。
+func TestTodoQuadrant(t *testing.T) {
+	s := openTemp(t)
+
+	combos := []struct {
+		title     string
+		important bool
+		urgent    bool
+	}{
+		{"重要且紧急", true, true},
+		{"重要不紧急", true, false},
+		{"紧急不重要", false, true},
+		{"都不", false, false},
+	}
+	ids := make([]int64, 0, len(combos))
+	for _, c := range combos {
+		id, err := s.CreateTodo(Todo{
+			Title:     c.title,
+			Status:    "待办",
+			Priority:  1,
+			Important: c.important,
+			Urgent:    c.urgent,
+		})
+		if err != nil {
+			t.Fatalf("CreateTodo(%s): %v", c.title, err)
+		}
+		ids = append(ids, id)
+	}
+
+	// 单条读回。
+	for i, c := range combos {
+		got, ok, err := s.TodoByID(ids[i])
+		if err != nil || !ok {
+			t.Fatalf("TodoByID(%s): ok=%v err=%v", c.title, ok, err)
+		}
+		if got.Important != c.important || got.Urgent != c.urgent {
+			t.Errorf("%s 往返错误: important=%v urgent=%v", c.title, got.Important, got.Urgent)
+		}
+	}
+
+	// 列表读回：ListTodos 也必须带这两列。
+	list, err := s.ListTodos()
+	if err != nil || len(list) != len(combos) {
+		t.Fatalf("ListTodos: n=%d err=%v", len(list), err)
+	}
+	byTitle := make(map[string]Todo, len(list))
+	for _, td := range list {
+		byTitle[td.Title] = td
+	}
+	for _, c := range combos {
+		td, ok := byTitle[c.title]
+		if !ok {
+			t.Fatalf("列表里缺少 %q", c.title)
+		}
+		if td.Important != c.important || td.Urgent != c.urgent {
+			t.Errorf("列表里 %s 的两列错误: %+v", c.title, td)
+		}
+	}
+
+	// 落库用 0/1 整数表示（bool ↔ 0/1）。
+	var important, urgent int
+	if err := s.db.QueryRow(`SELECT important, urgent FROM todo WHERE id = ?`, ids[0]).
+		Scan(&important, &urgent); err != nil {
+		t.Fatalf("直接读列: %v", err)
+	}
+	if important != 1 || urgent != 1 {
+		t.Errorf("bool 应以 1/0 落库，实际 important=%d urgent=%d", important, urgent)
+	}
+
+	// 更新也要带上两列：把「都不」改成「重要且紧急」。
+	last, _, _ := s.TodoByID(ids[3])
+	last.Important, last.Urgent = true, true
+	if err := s.UpdateTodo(last); err != nil {
+		t.Fatalf("UpdateTodo: %v", err)
+	}
+	after, _, _ := s.TodoByID(ids[3])
+	if !after.Important || !after.Urgent {
+		t.Errorf("更新未写到 important/urgent: %+v", after)
+	}
+}
+
+// TestMigrateV3Database 老库升级：手工用 database/sql 建一个 v3 结构（无新列）
+// 的库并写入数据，用新版 Open 打开后应自动补列——旧数据还在、新列取默认值、
+// 之后能写新值，再打开一次也不报错（补列幂等）。
+func TestMigrateV3Database(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v3.db")
+
+	// 这里刻意绕开 Open：模拟旧版本写出来的文件（schema_meta version=3，
+	// repo/todo 还是旧表结构）。
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("打开 v3 库失败: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	v3 := []string{
+		`CREATE TABLE schema_meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+		`CREATE TABLE project (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT NOT NULL,
+			"desc"     TEXT NOT NULL DEFAULT '',
+			status     TEXT NOT NULL DEFAULT '进行中',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE repo (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id     INTEGER NOT NULL DEFAULT 0,
+			name           TEXT NOT NULL,
+			url            TEXT NOT NULL DEFAULT '',
+			local_path     TEXT NOT NULL DEFAULT '',
+			branch         TEXT NOT NULL DEFAULT '',
+			note           TEXT NOT NULL DEFAULT '',
+			status         TEXT NOT NULL DEFAULT '未知',
+			status_msg     TEXT NOT NULL DEFAULT '',
+			dirty          INTEGER NOT NULL DEFAULT 0,
+			ahead          INTEGER NOT NULL DEFAULT 0,
+			behind         INTEGER NOT NULL DEFAULT 0,
+			last_commit    TEXT NOT NULL DEFAULT '',
+			last_commit_at TEXT NOT NULL DEFAULT '',
+			checked_at     TEXT NOT NULL DEFAULT '',
+			created_at     TEXT NOT NULL,
+			updated_at     TEXT NOT NULL
+		)`,
+		`CREATE TABLE todo (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			title      TEXT NOT NULL,
+			note       TEXT NOT NULL DEFAULT '',
+			project_id INTEGER NOT NULL DEFAULT 0,
+			repo_id    INTEGER NOT NULL DEFAULT 0,
+			priority   INTEGER NOT NULL DEFAULT 1,
+			status     TEXT NOT NULL DEFAULT '待办',
+			due_at     TEXT NOT NULL DEFAULT '',
+			done_at    TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+	}
+	for _, q := range v3 {
+		if _, err := db.Exec(q); err != nil {
+			_ = db.Close()
+			t.Fatalf("建 v3 表失败: %v", err)
+		}
+	}
+
+	ts := nowText()
+	if _, err := db.Exec(
+		`INSERT INTO repo(project_id, name, url, local_path, branch, note, status,
+		                  status_msg, dirty, ahead, behind, last_commit, last_commit_at,
+		                  checked_at, created_at, updated_at)
+		 VALUES(0, 'old/repo', '', 'D:\code\old', 'main', '老备注', '正常',
+		        '工作区干净', 0, 0, 0, '', '', '', ?, ?)`, ts, ts); err != nil {
+		_ = db.Close()
+		t.Fatalf("写入 v3 仓库失败: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO todo(title, note, project_id, repo_id, priority, status,
+		                  due_at, done_at, created_at, updated_at)
+		 VALUES('老待办', '升级前写入', 0, 0, 2, '待办', '', '', ?, ?)`, ts, ts); err != nil {
+		_ = db.Close()
+		t.Fatalf("写入 v3 待办失败: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO schema_meta(key, value) VALUES('schema_version', '3')`); err != nil {
+		_ = db.Close()
+		t.Fatalf("写入 v3 版本号失败: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭 v3 库失败: %v", err)
+	}
+
+	// 用当前版本打开，升级应自动发生。
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("打开 v3 库应自动迁移: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if v, _, err := s.Flag("schema_version"); err != nil || v != schemaVersion {
+		t.Fatalf("升级后版本应为 %s，实际 %q err=%v", schemaVersion, v, err)
+	}
+
+	repos, err := s.ListRepos()
+	if err != nil || len(repos) != 1 || repos[0].Name != "old/repo" {
+		t.Fatalf("升级后老仓库应能读出: rows=%v err=%v", repos, err)
+	}
+	r := repos[0]
+	if r.Importance != 0 || r.Learning != 0 || r.Difficulty != 0 || r.Review != "" {
+		t.Errorf("升级后新列默认值应为 0/空串: %+v", r)
+	}
+
+	todos, err := s.ListTodos()
+	if err != nil || len(todos) != 1 || todos[0].Title != "老待办" {
+		t.Fatalf("升级后老待办应能读出: rows=%v err=%v", todos, err)
+	}
+	if todos[0].Important || todos[0].Urgent {
+		t.Errorf("升级后待办默认不应重要/紧急: %+v", todos[0])
+	}
+
+	// 升级后两条写入路径都可用。
+	if err := s.SaveRepoReview(r.ID, 4, 3, 2, "升级后补的评价\n第二行"); err != nil {
+		t.Fatalf("SaveRepoReview: %v", err)
+	}
+	reviewed, _, _ := s.RepoByID(r.ID)
+	if reviewed.Importance != 4 || reviewed.Learning != 3 || reviewed.Difficulty != 2 ||
+		reviewed.Review != "升级后补的评价\n第二行" {
+		t.Errorf("升级后写评分/评价失败: %+v", reviewed)
+	}
+
+	td := todos[0]
+	td.Important, td.Urgent = true, false
+	if err := s.UpdateTodo(td); err != nil {
+		t.Fatalf("UpdateTodo: %v", err)
+	}
+	tdAfter, _, _ := s.TodoByID(td.ID)
+	if !tdAfter.Important || tdAfter.Urgent {
+		t.Errorf("升级后写 important/urgent 失败: %+v", tdAfter)
+	}
+
+	// 再打开一次：补列是幂等的，不应报 duplicate column name。
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("重复打开升级后的库: %v", err)
+	}
+	defer s2.Close()
 }
 
 // todoTitles 把待办标题拼出来，排序失败时打印完整实际顺序。

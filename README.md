@@ -18,13 +18,23 @@
 
 ## 二、功能
 
-- **待办**：快速输入（回车即存）、优先级、截止日、挂项目/挂仓库、勾选完成、按状态与项目筛选
+- **待办**：快速输入（回车即存）、优先级、**重要 / 紧急**双开关、**截止时间与倒计时**、
+  挂项目/挂仓库、勾选完成、按状态与项目筛选
+- **四象限**：总览页下方按「重要 × 紧急」把未完成待办分四格（马上做 / 排进计划 /
+  尽快清掉 / 有空再说），每格直接勾完成
 - **项目**：新建/编辑/暂停/归档，卡片上直接显示仓库数、未完成待办数与仓库清单
-- **仓库**：一次导入多个（`owner/repo` 每行一个，或从 GitHub 读列表）；表格展示
-  **状态 / 差异 / 分支 / 最近提交**；行内可拉取、提交、编辑
+- **仓库导入**：
+  - **本地文件夹**：点「选择文件夹」可多选，自动从 `.git` 解析 origin、分支、ahead/behind 与状态；
+    没有远端时用文件夹名
+  - **远程仓库**：一次贴多行 `owner/repo` 或地址，或从 GitHub 读列表；重复/非法行自动跳过
+- **仓库表格**：仓库 / 项目 / 分支 / 状态 / **五星评分** / 差异 / 最近提交 + 行内操作（详情·拉取·提交·编辑）
+- **仓库详情页**（表格里点「详情」）：
+  - **README 只读浏览**（本地文件优先，可取 GitHub 上的；Markdown 渲染，超长截断）
+  - **三维五星评分**：重要程度 / 可学习 / 难度，外加一段评价
+  - 仓库信息（远端、本地目录、分支、最近提交、检查时间、差异）与快捷动作
 - **批量操作**：勾选多个仓库后，从底部批量条执行「批量拉取」「批量提交并推送」「刷新状态」「刷新远端信息」
 - **状态是算出来的**（不是手填）：待提交 / 需要更新 / 待推送 / 正常 / 未克隆 / 错误
-- **手动联网**：GitHub API 只在「从 GitHub 读取我的仓库」和「刷新远端信息」时调用，没有定时器、没有后台轮询
+- **手动联网**：GitHub API 只在「读取我的仓库」「刷新远端信息」「读 README」时调用，没有定时器、没有后台轮询
 - **本机存储**：SQLite（纯 Go 驱动，无 cgo）；配置、库、日志都在系统用户目录，可在「设置 → 关于与诊断」里打开
 - 主题/字号/侧栏收缩/背景图/自动更新/托盘/单实例等桌面能力沿用 bestuav-mygo 底座
 
@@ -40,15 +50,21 @@
 |---|---|
 | ![项目](docs/screenshots/atlas-projects.png) | ![仓库](docs/screenshots/atlas-repos.png) |
 
-| 导入仓库（多行 / 读取 GitHub 列表） | 批量提交并推送 |
+| 仓库详情（README + 五星评分 + 评价） |
+|---|
+| ![仓库详情](docs/screenshots/atlas-repo-detail.png) |
+
+| 导入仓库（本地文件夹 / 远程地址） | 批量提交并推送 |
 |---|---|
 | ![导入](docs/screenshots/atlas-dialog-import.png) | ![批量提交](docs/screenshots/atlas-dialog-commit.png) |
 
 ## 四、三步上手
 
 1. **建项目**：项目页 →「新建项目」。按「一件事」分组即可，例如「星图」「量子科学桌面端」「内部工具链」。
-2. **导仓库**：仓库页 →「导入仓库」。把 `owner/repo` 每行一个粘进去；
-   或者先在「设置 → 工作区」填 GitHub 令牌，点「从 GitHub 读取我的仓库」。
+2. **导仓库**：仓库页 →「导入仓库」。两种方式二选一或混用：
+   - **本地文件夹**：点「选择文件夹…」可多选，自动解析 `.git` 的 origin、分支与状态；
+   - **远程仓库**：把 `owner/repo` 每行一个粘进去，或先在「设置 → 工作区」填 GitHub 令牌后点
+     「从 GitHub 读取我的仓库」。
    本地目录默认放在「设置 → 工作区 → 仓库根目录」下的 `owner-repo/`。
 3. **记待办**：待办页顶部输入框写一句话，回车。
 
@@ -79,29 +95,41 @@ bestuav-atlas/
 │   │   ├── page_todos.go      # 待办
 │   │   ├── page_projects.go   # 项目
 │   │   ├── page_repos.go      # 仓库（表格 + 批量条）
-│   │   ├── atlas_data.go      # 三页共用的数据快照、状态语义、时间文案
-│   │   ├── atlas_batch.go     # 批量探测/拉取/提交推送/远端信息
+│   │   ├── page_repo_detail.go# 仓库详情（README + 评分 + 评价）
+│   │   ├── atlas_data.go      # 三页共用的数据快照、状态语义、倒计时、时间文案
+│   │   ├── atlas_batch.go     # 本地/远程导入、批量探测/拉取/提交推送/远端信息
 │   │   ├── atlas_dialogs.go   # 导入/编辑/批量提交弹窗
 │   │   ├── settings_atlas.go  # 设置页「工作区」区块
 │   │   └── shell/             # 侧栏与内容区骨架（不认识业务）
 │   ├── store/                 # SQLite：project / repo / todo + 任务/事件/页面状态
 │   ├── gitx/                  # 本地 git：Inspect / Fetch / Pull / CommitAll / Push
-│   ├── github/                # GitHub REST：Repo / ListRepos / ParseRemote
+│   ├── github/                # GitHub REST：Repo / ListRepos / Readme / ParseRemote
+│   ├── readme/                # 读本地仓库根目录的 README
 │   ├── settings/              # settings.json（含工作目录与 GitHub 令牌）
 │   └── ui/                    # 设计系统：kit（卡片/药丸/间距）、icons、canvas
 ├── docs/                      # 立项与数据模型、使用说明、截图
 └── scripts/                   # 打包脚本、newpage 页面生成器
 ```
 
-## 七、数据模型（SQLite schema v3）
+## 七、数据模型（SQLite schema v4）
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | `project` | name / desc / status | 状态：进行中 / 暂停 / 归档 |
-| `repo` | project_id / name / url / local_path / branch / status / dirty / ahead / behind / last_commit | 一行 = 一个仓库登记；状态与差异是缓存，随时可重算 |
-| `todo` | title / note / project_id / repo_id / priority / status / due_at / done_at | 优先级 0 低 1 中 2 高；状态 待办 / 进行中 / 已完成 |
+| `repo` | project_id / name / url / local_path / branch / status / dirty / ahead / behind / last_commit / **importance / learning / difficulty / review** | 一行 = 一个仓库登记；状态与差异是缓存，评分/评价是人工资产 |
+| `todo` | title / note / project_id / repo_id / priority / **important / urgent** / status / due_at / done_at | 优先级 0 低 1 中 2 高；重要×紧急 决定四象限 |
 
 时间统一存 UTC RFC3339Nano 字符串，零值存空串；`store` 单连接串行化，避免 SQLITE_BUSY。
+老库（v3）打开时按 `PRAGMA table_info` 缺列自动 `ALTER TABLE`，不需要手工迁移。
+
+**评分**：三个维度各 0–5 星（0 = 未评）：重要程度、可学习、难度。
+表格里只显示「重要程度」的星，悬停可看三维；详情页三个都能改。
+
+**四象限**：`important × urgent` 两个布尔值。
+重要且紧急（马上做）/ 重要不紧急（排进计划）/ 紧急不重要（尽快清掉）/ 都不（有空再说）。
+
+**倒计时**：`due_at` 支持到分钟（`2026-11-30 18:00`，只填日期则按当天 00:00）。
+列表显示「剩 3天4小时 / 逾期 2小时」，逾期标红。
 
 **仓库状态判定**（`internal/view/atlas_data.go`，优先级从上到下）：
 

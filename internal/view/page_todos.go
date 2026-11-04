@@ -36,9 +36,16 @@ func (a *App) todoPage(c *ui.Context, t *ui.Theme) {
 				a.projectSelect(c, "快速添加的项目", &a.atlasUI.todoQuickProject)
 				ui.Text(c, "优先级").TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 				ui.Segmented(c, &a.atlasUI.todoQuickPriority, "低", "中", "高")
+				ui.Text(c, "四象限").TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+				choice.Toggle(c, "重要", &a.atlasUI.todoQuickImportant)
+				choice.Toggle(c, "紧急", &a.atlasUI.todoQuickUrgent)
 				ui.Text(c, "").Grow(1)
 				if ui.Button(c, "详细填写…").Clicked() {
-					a.openTodoDialog(store.Todo{Priority: a.atlasUI.todoQuickPriority})
+					a.openTodoDialog(store.Todo{
+						Priority:  a.atlasUI.todoQuickPriority,
+						Important: a.atlasUI.todoQuickImportant,
+						Urgent:    a.atlasUI.todoQuickUrgent,
+					})
 				}
 				if ui.PrimaryButton(c, "添加").Clicked() {
 					a.quickAddTodo()
@@ -52,7 +59,7 @@ func (a *App) todoPage(c *ui.Context, t *ui.Theme) {
 		// ---- 列表 ----
 		rows := a.filteredTodos()
 		kit.Card(c, t, func() {
-			kit.CardHeader(c, t, "待办", "勾选即完成；截止日过期的会标红。", nil)
+			kit.CardHeader(c, t, "待办", "勾选即完成；截止时间过了会标红并显示逾期时长。", nil)
 			if len(rows) == 0 {
 				kit.EmptyHint(c, t, "这里还没有待办。在上面输入框里写一件小事，回车即可。")
 				return
@@ -151,7 +158,13 @@ func (a *App) todoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 			}
 			kit.Pill(c, t, label, col)
 		}
-		if label, overdue := dueText(td.DueAt); label != "" {
+		if td.Important {
+			kit.Pill(c, t, "重要", t.Danger)
+		}
+		if td.Urgent {
+			kit.Pill(c, t, "紧急", t.Warning)
+		}
+		if label, overdue := countdownText(td.DueAt); label != "" {
 			col := t.TextMuted
 			if overdue {
 				col = t.Danger
@@ -186,6 +199,8 @@ func (a *App) quickAddTodo() {
 		Title:     title,
 		ProjectID: a.atlas().projectIDByName(u.todoQuickProject),
 		Priority:  u.todoQuickPriority,
+		Important: u.todoQuickImportant,
+		Urgent:    u.todoQuickUrgent,
 		Status:    TodoOpen,
 	}
 	if !a.saveTodo(td) {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ELY-Open-Source/CrychicUI/choice"
+	"github.com/ELY-Open-Source/CrychicUI/form"
 	"github.com/ELY-Open-Source/CrychicUI/overlay"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -50,6 +51,18 @@ type atlasUI struct {
 	commitMsg string
 	commitIDs []int64
 
+	// ---- 仓库详情页 ----
+	detailID     int64
+	detailImport int // 重要程度 0–5
+	detailLearn  int // 可学习 0–5
+	detailDiff   int // 难度 0–5
+	detailReview string
+	detailLoaded bool   // 本页是否已读过 README（进入时读一次）
+	readmeText   string // README 正文（已截断）
+	readmeName   string // 本地文件名
+	readmeFrom   string // "local" / "remote" / ""
+	readmeErr    string // 读不到时的解释
+
 	// ---- 项目页 ----
 	projFormOpen bool
 	projForm     projectForm
@@ -59,6 +72,9 @@ type atlasUI struct {
 	todoQuick         string // 快速添加输入框
 	todoQuickProject  string
 	todoQuickPriority int
+	// 快速添加的两个象限开关（重要 / 紧急）。
+	todoQuickImportant bool
+	todoQuickUrgent    bool
 	todoFilter        string // 全部 / 待办 / 进行中 / 已完成
 	todoProject       string // 全部项目 / 项目名
 	todoSearch        string
@@ -92,8 +108,11 @@ type todoForm struct {
 	Project  string
 	Repo     string
 	Priority int
-	Status   string
-	Due      string
+	// Important / Urgent 决定四象限归属（重要 × 紧急）。
+	Important bool
+	Urgent    bool
+	Status    string
+	Due       string
 }
 
 // 待办的三个状态。
@@ -164,14 +183,16 @@ func (a *App) openTodoDialog(td store.Todo) {
 		status = TodoOpen
 	}
 	a.atlasUI.todoForm = todoForm{
-		ID:       td.ID,
-		Title:    td.Title,
-		Note:     td.Note,
-		Project:  d.projectNameOrDash(td.ProjectID),
-		Repo:     firstNonEmpty(d.repoName(td.RepoID), "不关联"),
-		Priority: td.Priority,
-		Status:   status,
-		Due:      due,
+		ID:        td.ID,
+		Title:     td.Title,
+		Note:      td.Note,
+		Project:   d.projectNameOrDash(td.ProjectID),
+		Repo:      firstNonEmpty(d.repoName(td.RepoID), "不关联"),
+		Priority:  td.Priority,
+		Important: td.Important,
+		Urgent:    td.Urgent,
+		Status:    status,
+		Due:       due,
 	}
 	a.atlasUI.dialog = "todo"
 	a.atlasUI.dialogPage = a.page
@@ -292,21 +313,35 @@ func containsString(items []string, want string) bool {
 
 func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 	a.atlasModal(c, t, "导入仓库", func() {
-		dialogDesc(c, t, "每行一个 owner/repo 或仓库地址；已存在的会跳过。导入只登记，状态随后自动探测。")
+		dialogDesc(c, t, "本地文件夹会自动解析 git 远端、分支与状态；远程仓库每行一个 owner/repo 或地址，已存在的会跳过。")
 
+		// ---- 本地文件夹 ----
+		ui.Text(c, "从本地文件夹导入").Bold().FontSize(t.FontSize - 2)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if ui.PrimaryButton(c, "选择文件夹…").Clicked() && !a.atlasUI.busy {
+				a.pickLocalRepos(a.atlas().projectIDByName(a.atlasUI.importProject))
+			}
+			ui.Text(c, "可多选；会读 .git 的 origin 地址，没有远端时用文件夹名").
+				TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+		})
+
+		ui.Divider(c).Margin(4, 0)
+
+		// ---- 远程地址 ----
+		ui.Text(c, "从远程仓库导入").Bold().FontSize(t.FontSize - 2)
 		ui.TextArea(c, &a.atlasUI.importText).
 			Placeholder("owner/repo\nhttps://github.com/owner/repo\n…").
-			Height(150)
+			Height(110)
 
-		dialogRow(c, "归属项目", func() {
-			a.projectSelect(c, "归属项目", &a.atlasUI.importProject)
+		// 两个短字段并排（CrychicUI 的 FormRow 会在窄窗口里自动竖排）。
+		form.FormRow(c, []func(){
+			func() { dialogRow(c, "归属项目", func() { a.projectSelect(c, "归属项目", &a.atlasUI.importProject) }) },
+			func() {
+				dialogRow(c, "本地根目录", func() { ui.TextInput(c, &a.atlasUI.importRoot).Placeholder(a.workRoot()) })
+			},
 		})
-		dialogRow(c, "本地根目录", func() {
-			ui.TextInput(c, &a.atlasUI.importRoot).Grow(1).
-				Placeholder(a.workRoot())
-			ui.Text(c, "仓库会放在「根目录/owner-repo」").
-				TextColor(t.TextMuted).FontSize(t.FontSize - 2).Margin(8, 0, 0, 0)
-		})
+		ui.Text(c, "远程仓库会克隆到「根目录/owner-repo」（导入只登记，之后用命令行或你自己的工具 clone）。").
+			TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "从 GitHub 读取我的仓库").Clicked() && !a.atlasUI.busy {
@@ -324,7 +359,7 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 			if ui.Button(c, "取消").Clicked() {
 				a.closeAtlasDialog()
 			}
-			if ui.PrimaryButton(c, "导入").Clicked() {
+			if ui.PrimaryButton(c, "导入远程仓库").Clicked() {
 				lines := strings.Split(a.atlasUI.importText, "\n")
 				added, skipped := a.importRepos(lines, a.atlas().projectIDByName(a.atlasUI.importProject), a.atlasUI.importRoot)
 				if added == 0 && skipped == 0 {
@@ -593,6 +628,12 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 		dialogRow(c, "优先级", func() {
 			ui.Segmented(c, &f.Priority, "低", "中", "高")
 		})
+		dialogRow(c, "四象限", func() {
+			choice.Toggle(c, "重要", &f.Important)
+			choice.Toggle(c, "紧急", &f.Urgent)
+			ui.Text(c, "重要 × 紧急 决定它在总览四象限里的位置").
+				TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+		})
 		dialogRow(c, "状态", func() {
 			idx := 0
 			for i, s := range TodoStatuses {
@@ -605,8 +646,9 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 				f.Status = got
 			}
 		})
-		dialogRow(c, "截止日", func() {
-			ui.TextInput(c, &f.Due).Width(160).Placeholder("2026-11-30，可空")
+		dialogRow(c, "截止时间", func() {
+			ui.TextInput(c, &f.Due).Width(200).
+				Placeholder("2026-11-30 18:00 或 2026-11-30，可空")
 		})
 
 		dialogButtons(c, func() {
@@ -643,6 +685,8 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 					ProjectID: a.atlas().projectIDByName(f.Project),
 					RepoID:    a.atlas().repoIDByName(f.Repo),
 					Priority:  f.Priority,
+					Important: f.Important,
+					Urgent:    f.Urgent,
 					Status:    f.Status,
 					DueAt:     due,
 				}
@@ -655,13 +699,21 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 	})
 }
 
-// parseDueDate 解析「2026-11-30」这类日期；空串表示没有期限。
+// parseDueDate 解析截止时间：支持「2026-11-30 18:00」（带时刻，用于倒计时）、
+// 「2026-11-30」、「2026/11/30」与「11-30」（默认今年）。空串表示没有期限。
 func parseDueDate(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return time.Time{}, nil
 	}
-	for _, layout := range []string{"2006-01-02", "2006/01/02", "01-02"} {
+	for _, layout := range []string{
+		"2006-01-02 15:04",
+		"2006/01/02 15:04",
+		"2006-01-02T15:04",
+		"2006-01-02",
+		"2006/01/02",
+		"01-02",
+	} {
 		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
 			if layout == "01-02" {
 				now := time.Now()
