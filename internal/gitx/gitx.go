@@ -19,8 +19,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -234,6 +236,65 @@ func Push(ctx context.Context, dir string) (string, error) {
 	return out, nil
 }
 
+// Clone 把远程仓库克隆到 dir。
+//
+//   - dir 已存在且非空 → 返回错误（调用方应先用本地导入识别已有目录）；
+//   - 父目录不存在会自动创建；
+//   - ctx 控制超时（调用方给 5 分钟量级）；
+//   - 失败时错误里带 git 的输出摘要（截断 800 字符）。
+//
+// 参数顺序沿用 git 的位置参数：`git clone -- url dir`。`--` 之后的两个词都是
+// 位置参数，url 以 "-" 开头（极少见，但合法）时不会被当成选项。
+func Clone(ctx context.Context, url, dir string) error {
+	if strings.TrimSpace(url) == "" {
+		return fmt.Errorf("gitx: 克隆地址不能为空")
+	}
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("gitx: 克隆目标目录不能为空")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("gitx: 克隆已取消: %w", err)
+	}
+
+	// 解析成绝对路径：git 子进程的工作目录会被换成父目录，目标路径必须是
+	// 与它无关的绝对路径，否则 `git clone -- url dst` 会落到父目录里。
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("gitx: 解析克隆目标目录失败: %w", err)
+	}
+
+	// 已存在且非空：git 自己也会拒绝，但先查一次既给出更明确的中文提示，
+	// 也保证一个字节都不碰已有文件——调用方会先用本地导入识别这种目录。
+	switch entries, rerr := os.ReadDir(abs); {
+	case rerr == nil:
+		if len(entries) > 0 {
+			return fmt.Errorf("gitx: 目标目录已存在且非空: %s（请先用本地导入识别已有目录）", dir)
+		}
+		// 空目录是允许的：git clone 自己也接受，等价于原地初始化后拉取。
+	case errors.Is(rerr, fs.ErrNotExist):
+		// 目标还不存在是常态，父目录可能也不存在，下面一并创建。
+	default:
+		return fmt.Errorf("gitx: 读取克隆目标目录失败: %w", rerr)
+	}
+
+	// git clone 不会替调用方建父目录；而父目录还得当子进程的工作目录。
+	parent := filepath.Dir(abs)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("gitx: 创建克隆目标的父目录失败: %w", err)
+	}
+
+	// 目标目录此刻还不存在（或为空），不能作为 cmd.Dir，所以工作目录用父目录，
+	// 目标路径作为位置参数交给 git——其余（-c core.quotepath=false、关闭交互、
+	// 合并 stderr、失败摘要）全部复用 runIn。
+	if _, err := runIn(ctx, parent, "clone", "--", url, abs); err != nil {
+		return fmt.Errorf("gitx: 克隆 %s 失败: %w", url, err)
+	}
+	return nil
+}
+
 // HasGit 报告本机是否有可用的 git 命令。
 //
 // 刻意不做缓存：用户完全可能在应用运行期间装好 Git（安装器就是在同一个会话里
@@ -256,6 +317,15 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 	if err := checkDir(dir); err != nil {
 		return "", err
 	}
+	return runIn(ctx, dir, args...)
+}
+
+// runIn 是 run 的实际执行体：进程工作目录与 git 参数分开给。
+//
+// 拆出这一层只为一个场景——Clone。clone 的目标目录是位置参数，在命令跑起来
+// 之前它可能压根不存在，不能当 cmd.Dir 用；此时把 cmdDir 设成它的父目录即可。
+// run 的行为保持不变（cmdDir 恒等于 dir）。
+func runIn(ctx context.Context, cmdDir string, args ...string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -263,7 +333,7 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 	// 默认 git 会把非 ASCII 路径转成 \344\275\240 这种八进制转义，界面上没法看。
 	full := append([]string{"-c", "core.quotepath=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Dir = dir // 路径只交给 Dir，绝不拼进命令行字符串
+	cmd.Dir = cmdDir // 路径只交给 Dir，绝不拼进命令行字符串
 	cmd.Env = gitEnv()
 
 	var buf bytes.Buffer

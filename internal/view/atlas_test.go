@@ -1,6 +1,7 @@
 package view
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"bestuav-atlas/internal/forge"
 	"bestuav-atlas/internal/gitx"
 	"bestuav-atlas/internal/settings"
 	"bestuav-atlas/internal/store"
@@ -235,28 +237,33 @@ func TestQuickAddTodo(t *testing.T) {
 	}
 }
 
-// TestImportReposDedup 一次导入多行，重复与非法行被跳过。
+// TestImportReposDedup 一次导入多行，重复与非法行被跳过；平台按域名识别。
 func TestImportReposDedup(t *testing.T) {
 	a, _ := newTestApp(t)
 
-	added, skipped := a.importRepos([]string{
+	added, skipped, ids := a.importRepos([]string{
 		"lark203/bestuav-atlas",
 		"https://github.com/lark203/bestuav-mygo.git",
+		"https://gitee.com/mirrors/gin.git",
 		"lark203/bestuav-atlas", // 重复
 		"不是仓库",                  // 非法
 		"",                     // 空行
-	}, 0, filepath.Join(t.TempDir(), "repos"))
+	}, 0, filepath.Join(t.TempDir(), "repos"), forge.PlatformForHost("github.com"))
 
-	if added != 2 || skipped != 2 {
-		t.Fatalf("导入计数不对：added=%d skipped=%d，期望 2/2", added, skipped)
+	if added != 3 || skipped != 2 {
+		t.Fatalf("导入计数不对：added=%d skipped=%d，期望 3/2", added, skipped)
+	}
+	if len(ids) != added {
+		t.Errorf("返回的 id 数应与成功数一致：ids=%d added=%d", len(ids), added)
 	}
 	repos, err := a.store.ListRepos()
 	if err != nil {
 		t.Fatalf("读取仓库失败: %v", err)
 	}
-	if len(repos) != 2 {
-		t.Fatalf("库里应有 2 个仓库，实际 %d：%+v", len(repos), repos)
+	if len(repos) != 3 {
+		t.Fatalf("库里应有 3 个仓库，实际 %d：%+v", len(repos), repos)
 	}
+	hosts := map[string]string{}
 	for _, r := range repos {
 		if r.Status != RepoUnknown {
 			t.Errorf("新导入的仓库状态应为「未知」，实际 %q", r.Status)
@@ -264,6 +271,13 @@ func TestImportReposDedup(t *testing.T) {
 		if r.LocalPath == "" {
 			t.Errorf("指定了根目录时本地路径不该为空：%+v", r)
 		}
+		hosts[r.Name] = r.Host
+	}
+	if hosts["mirrors/gin"] != "gitee.com" {
+		t.Errorf("Gitee 地址应识别出平台：%+v", hosts)
+	}
+	if hosts["lark203/bestuav-atlas"] != "github.com" {
+		t.Errorf("纯 owner/repo 行应落到默认平台（GitHub）：%+v", hosts)
 	}
 }
 
@@ -301,6 +315,61 @@ func TestRepoDetailPage(t *testing.T) {
 	}
 	if a.atlasUI.detailReview != "先读 README。" {
 		t.Errorf("评价未回填：%q", a.atlasUI.detailReview)
+	}
+}
+
+// TestCloneOne 导入后顺手克隆：把本地 bare 仓库克隆到登记的目录，并刷新状态。
+func TestCloneOne(t *testing.T) {
+	if !gitx.HasGit() {
+		t.Skip("本机没有 git")
+	}
+	src := t.TempDir()
+	runGit(t, src, "init", "-b", "main")
+	runGit(t, src, "config", "user.name", "atlas-test")
+	runGit(t, src, "config", "user.email", "atlas@example.com")
+	if err := os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, src, "add", "-A")
+	runGit(t, src, "commit", "-m", "init")
+
+	// 用本地 bare 仓库当「远端」：git clone 对普通路径同样有效，不需要联网。
+	bare := filepath.Join(t.TempDir(), "demo.git")
+	runGit(t, t.TempDir(), "clone", "--bare", src, bare)
+
+	a, _ := newTestApp(t)
+	dest := filepath.Join(t.TempDir(), "cloned")
+	id, err := a.store.CreateRepo(store.Repo{Name: "demo/repo", URL: bare, LocalPath: dest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+	r, ok := a.repoByID(id)
+	if !ok {
+		t.Fatal("仓库没读到")
+	}
+	if err := a.cloneOne(context.Background(), r); err != nil {
+		t.Fatalf("克隆失败: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "main.go")); err != nil {
+		t.Fatalf("克隆后应有 main.go: %v", err)
+	}
+	after, ok, err := a.store.RepoByID(id)
+	if err != nil || !ok {
+		t.Fatalf("读库失败: %v", err)
+	}
+	if after.Status == RepoUnknown || after.Branch != "main" {
+		t.Errorf("克隆后状态/分支应被刷新：status=%q branch=%q", after.Status, after.Branch)
+	}
+}
+
+// runGit 在 dir 里跑一条 git 命令，失败即测试失败。
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
 
@@ -343,6 +412,9 @@ func TestImportLocalRepos(t *testing.T) {
 	r := repos[0]
 	if r.Name != "lark203/demo-repo" {
 		t.Errorf("名字应从 origin 解析，实际 %q", r.Name)
+	}
+	if r.Host != "github.com" {
+		t.Errorf("平台主机应从 origin 解析，实际 %q", r.Host)
 	}
 	if r.LocalPath != dir {
 		t.Errorf("本地目录不对：%q", r.LocalPath)

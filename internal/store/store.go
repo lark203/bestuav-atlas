@@ -38,7 +38,8 @@ import (
 // 2：新增 page_pref（页面私有键值），见 internal/view/prefs.go。
 // 3：新增 project / repo / todo
 // 4：仓库评分与评价、待办重要/紧急
-const schemaVersion = "4"
+// 5：仓库所在平台主机
+const schemaVersion = "5"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -202,6 +203,7 @@ func (s *Store) migrate() error {
 			project_id     INTEGER NOT NULL DEFAULT 0,
 			name           TEXT NOT NULL,
 			url            TEXT NOT NULL DEFAULT '',
+			host           TEXT NOT NULL DEFAULT '',
 			local_path     TEXT NOT NULL DEFAULT '',
 			branch         TEXT NOT NULL DEFAULT '',
 			note           TEXT NOT NULL DEFAULT '',
@@ -283,6 +285,7 @@ func (s *Store) addMissingColumns() error {
 		cols  []addColumn
 	}{
 		{"repo", []addColumn{
+			{"host", `host TEXT NOT NULL DEFAULT ''`},
 			{"importance", `importance INTEGER NOT NULL DEFAULT 0`},
 			{"learning", `learning INTEGER NOT NULL DEFAULT 0`},
 			{"difficulty", `difficulty INTEGER NOT NULL DEFAULT 0`},

@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"bestuav-atlas/internal/forge"
 	"bestuav-atlas/internal/gitx"
 	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/store"
@@ -530,6 +531,62 @@ func sameDay(a, b time.Time) bool {
 	ay, am, ad := a.Local().Date()
 	by, bm, bd := b.Local().Date()
 	return ay == by && am == bm && ad == bd
+}
+
+// ---- 平台与令牌 ----
+
+// platformForRepo 判断仓库属于哪个平台：优先用登记的 Host，其次从 URL / 名字推断。
+//
+// 为什么不用「只存 Provider」：自建 Gitea 的主机名各人不同，网页/克隆地址要靠 Host
+// 拼；Provider 只决定 API 长什么样。
+func platformForRepo(r store.Repo) forge.Platform {
+	if host := strings.TrimSpace(r.Host); host != "" {
+		return forge.PlatformForHost(host)
+	}
+	for _, raw := range []string{r.URL, r.Name} {
+		if p, _, _, ok := forge.Detect(raw); ok {
+			return p
+		}
+	}
+	return forge.PlatformForHost("github.com")
+}
+
+// hostOf 把用户填的实例地址变成 host（去掉协议与路径）。
+func hostOf(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// tokenFor 按平台主机取令牌。
+//
+// GitHub 复用「数据与诊断 → 仓库同步」那个 PAT（同一个令牌能做的事一样，
+// 存两份只会让用户改一处忘一处）；其它平台各存各的，互不通用。
+func (a *App) tokenFor(host string) string {
+	switch host {
+	case "github.com":
+		return strings.TrimSpace(a.settings.RepoToken)
+	case "gitee.com":
+		return strings.TrimSpace(a.settings.GiteeToken)
+	case "atomgit.com":
+		return strings.TrimSpace(a.settings.AtomGitToken)
+	default:
+		return strings.TrimSpace(a.settings.GiteaToken)
+	}
+}
+
+// forgeClient 按平台构造 API 客户端；自建 Gitea 用设置里的实例地址覆盖 Host。
+func (a *App) forgeClient(p forge.Platform) *forge.Client {
+	if p.Provider == forge.Gitea {
+		if h := hostOf(a.settings.GiteaHost); h != "" {
+			p.Host = h
+		}
+	}
+	return forge.New(p, a.tokenFor(p.Host))
 }
 
 // ---- 系统交互 ----

@@ -335,3 +335,129 @@ func TestEmptyDir(t *testing.T) {
 		t.Error("Push 空目录应报错")
 	}
 }
+
+// newRemoteWithCommit 建一个「已有一次提交」的裸仓库远端，全程本地、不联网。
+//
+// 做法：普通仓库 initRepo 后加 origin、push -u；沿用 initRepo 里已经配好的
+// 身份与 commit.gpgsign=false，避免 CI 上没有全局 git 身份导致 push/commit 失败。
+func newRemoteWithCommit(t *testing.T) string {
+	t.Helper()
+	work := initRepo(t)
+	bare := newBareRemote(t)
+	// 本地路径统一换成正斜杠：Windows 上反斜杠会被 git 当转义符。
+	gitIn(t, work, "remote", "add", "origin", filepath.ToSlash(bare))
+	gitIn(t, work, "push", "-u", "origin", "main")
+	return bare
+}
+
+// TestClone 克隆本地裸仓库：父目录不存在也要自动创建，落地后应是可识别的
+// git 工作区，文件齐全、分支跟随远端。
+func TestClone(t *testing.T) {
+	skipWithoutGit(t)
+	bare := newRemoteWithCommit(t)
+
+	// 刻意给三层不存在的父目录：Clone 必须自己 MkdirAll，git clone 不会建父目录。
+	dst := filepath.Join(t.TempDir(), "a", "b", "dst")
+	if err := Clone(context.Background(), filepath.ToSlash(bare), dst); err != nil {
+		t.Fatalf("Clone 失败: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "readme.md")); err != nil {
+		t.Errorf("克隆目录里没拿到 readme.md: %v", err)
+	}
+	st := Inspect(dst)
+	if !st.IsRepo {
+		t.Fatalf("克隆后 Inspect.IsRepo = false，Err = %q", st.Err)
+	}
+	if st.Branch != "main" {
+		t.Errorf("Branch = %q，期望 main", st.Branch)
+	}
+	if st.RemoteURL == "" {
+		t.Error("RemoteURL 为空，克隆后应能读到 origin 地址")
+	}
+}
+
+// TestCloneTargetNotEmpty 目标目录已存在且非空：直接报错，且一个字节都不动。
+func TestCloneTargetNotEmpty(t *testing.T) {
+	skipWithoutGit(t)
+	bare := newRemoteWithCommit(t)
+
+	dst := filepath.Join(t.TempDir(), "occupied")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("建目录失败: %v", err)
+	}
+	keep := filepath.Join(dst, "keep.txt")
+	writeFile(t, keep, "原有内容\n")
+
+	if err := Clone(context.Background(), filepath.ToSlash(bare), dst); err == nil {
+		t.Fatal("非空目标目录应报错")
+	}
+	b, err := os.ReadFile(keep)
+	if err != nil || string(b) != "原有内容\n" {
+		t.Errorf("原文件被破坏: %q err=%v", b, err)
+	}
+	// 也不该留下任何克隆产物。
+	if _, err := os.Stat(filepath.Join(dst, ".git")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("失败后不应留下 .git: %v", err)
+	}
+}
+
+// TestCloneIntoEmptyDir 目标目录存在但为空：允许，等价于 git 自己的行为。
+func TestCloneIntoEmptyDir(t *testing.T) {
+	skipWithoutGit(t)
+	bare := newRemoteWithCommit(t)
+
+	dst := filepath.Join(t.TempDir(), "empty")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatalf("建目录失败: %v", err)
+	}
+	if err := Clone(context.Background(), filepath.ToSlash(bare), dst); err != nil {
+		t.Fatalf("克隆到空目录应成功: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "readme.md")); err != nil {
+		t.Errorf("克隆结果不完整: %v", err)
+	}
+	if st := Inspect(dst); !st.IsRepo {
+		t.Errorf("克隆后不是 git 工作区: %q", st.Err)
+	}
+}
+
+// TestCloneCanceledContext 已被取消的 ctx 必须立刻失败，且不留下半成品目录。
+func TestCloneCanceledContext(t *testing.T) {
+	skipWithoutGit(t)
+	bare := newRemoteWithCommit(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	dst := filepath.Join(t.TempDir(), "canceled")
+	err := Clone(ctx, filepath.ToSlash(bare), dst)
+	if err == nil {
+		t.Fatal("已取消的 ctx 应报错")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("错误应包裹 context.Canceled，实际 %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dst, ".git")); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("取消后不应留下克隆结果: %v", serr)
+	}
+}
+
+// TestCloneValidation 空 url / 空 dir（含纯空白）都要给明确错误，不能落到 git。
+func TestCloneValidation(t *testing.T) {
+	skipWithoutGit(t)
+	ctx := context.Background()
+	dst := filepath.Join(t.TempDir(), "x")
+
+	for _, c := range []struct {
+		name, url, dir string
+	}{
+		{"空 url", "", dst},
+		{"空白 url", "   ", dst},
+		{"空 dir", "https://example.invalid/a/b.git", ""},
+		{"空白 dir", "https://example.invalid/a/b.git", "  \t "},
+	} {
+		if err := Clone(ctx, c.url, c.dir); err == nil {
+			t.Errorf("%s：应报错", c.name)
+		}
+	}
+}

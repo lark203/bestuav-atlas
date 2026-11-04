@@ -11,7 +11,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"bestuav-atlas/internal/github"
+	"bestuav-atlas/internal/forge"
 	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/store"
 )
@@ -46,6 +46,12 @@ type atlasUI struct {
 	importText    string
 	importProject string
 	importRoot    string
+	// importPlatform 纯 owner/repo 行归属的平台（索引对应 forgePlatforms）。
+	importPlatform int
+	// importClone 导入后是否顺手克隆到本地根目录。
+	importClone bool
+	// importOwner 从平台读「我的仓库」时用的 owner；空 = 当前令牌的仓库。
+	importOwner string
 
 	// 批量提交弹窗
 	commitMsg string
@@ -86,6 +92,7 @@ type atlasUI struct {
 type repoForm struct {
 	ID        int64
 	Name      string
+	URL       string // 远端地址（可空：纯本地仓库）
 	Project   string // 项目名（"未归属" = 0）
 	LocalPath string
 	Branch    string
@@ -149,6 +156,7 @@ func (a *App) openRepoDialog(r store.Repo) {
 	a.atlasUI.repoForm = repoForm{
 		ID:        r.ID,
 		Name:      r.Name,
+		URL:       r.URL,
 		Project:   d.projectNameOrDash(r.ProjectID),
 		LocalPath: r.LocalPath,
 		Branch:    r.Branch,
@@ -329,9 +337,15 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 
 		// ---- 远程地址 ----
 		ui.Text(c, "从远程仓库导入").Bold().FontSize(t.FontSize - 2)
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, "平台").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+			ui.Segmented(c, &a.atlasUI.importPlatform, "GitHub", "Gitee", "Gitea", "AtomGit")
+			ui.Text(c, "只影响「纯 owner/repo」行的归属；带域名的地址按域名自动识别").
+				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+		})
 		ui.TextArea(c, &a.atlasUI.importText).
-			Placeholder("owner/repo\nhttps://github.com/owner/repo\n…").
-			Height(110)
+			Placeholder("owner/repo\nhttps://github.com/owner/repo\ngit@atomgit.com:owner/repo.git\n…").
+			Height(100)
 
 		// 两个短字段并排（CrychicUI 的 FormRow 会在窄窗口里自动竖排）。
 		form.FormRow(c, []func(){
@@ -340,19 +354,23 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 				dialogRow(c, "本地根目录", func() { ui.TextInput(c, &a.atlasUI.importRoot).Placeholder(a.workRoot()) })
 			},
 		})
-		ui.Text(c, "远程仓库会克隆到「根目录/owner-repo」（导入只登记，之后用命令行或你自己的工具 clone）。").
-			TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			choice.Toggle(c, "导入后克隆", &a.atlasUI.importClone)
+		})
+		ui.Text(c, "勾选后把远程仓库克隆到「根目录/owner-repo」；大仓库会慢，进度显示在页头。").
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "从 GitHub 读取我的仓库").Clicked() && !a.atlasUI.busy {
-				a.fetchMyGitHubRepos()
+			if ui.Button(c, "从 "+forgePlatforms[a.atlasUI.importPlatform].Label()+" 读取我的仓库").Clicked() && !a.atlasUI.busy {
+				a.fetchPlatformRepos(a.importPlatform(), a.atlasUI.importOwner)
 			}
 			if a.atlasUI.busy {
 				ui.Spinner(c)
 				ui.Text(c, "正在读取…").TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 			}
 		})
-		ui.Text(c, "读取仓库列表需要令牌：设置 → 工作区 → GitHub 令牌。").
+		ui.Text(c, "读取列表需要该平台的令牌：设置 → 工作区；Gitea 还要填实例地址。").
 			TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 
 		dialogButtons(c, func() {
@@ -361,11 +379,13 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 			}
 			if ui.PrimaryButton(c, "导入远程仓库").Clicked() {
 				lines := strings.Split(a.atlasUI.importText, "\n")
-				added, skipped := a.importRepos(lines, a.atlas().projectIDByName(a.atlasUI.importProject), a.atlasUI.importRoot)
+				added, skipped, ids := a.importRepos(lines,
+					a.atlas().projectIDByName(a.atlasUI.importProject), a.atlasUI.importRoot, a.importPlatform())
 				if added == 0 && skipped == 0 {
 					a.toast("没有可导入的仓库，检查一下格式")
 					return
 				}
+				clone := a.atlasUI.importClone
 				a.closeAtlasDialog()
 				a.atlasUI.importText = ""
 				msg := "已导入 " + itoa(added) + " 个"
@@ -373,18 +393,52 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 					msg += "，跳过 " + itoa(skipped) + " 个（重复或格式不对）"
 				}
 				a.toast(msg)
-				a.inspectAllAsync()
+				switch {
+				case clone && len(ids) > 0:
+					a.cloneRepos(ids)
+				default:
+					a.inspectAllAsync()
+				}
 			}
 		})
 	})
 }
 
-// fetchMyGitHubRepos 用令牌调一次 GitHub API，把「我的仓库」填进导入框。
+// forgePlatforms 导入弹窗里可选的平台。
+//
+// Gitea 的 Host 是空的：自建实例地址来自设置，选中时由 App.importPlatform 填入。
+var forgePlatforms = []forge.Platform{
+	{Provider: forge.GitHub, Host: "github.com"},
+	{Provider: forge.Gitee, Host: "gitee.com"},
+	{Provider: forge.Gitea},
+	{Provider: forge.AtomGit, Host: "atomgit.com"},
+}
+
+// importPlatform 当前选中的平台（Gitea 用设置里的实例地址）。
+func (a *App) importPlatform() forge.Platform {
+	idx := a.atlasUI.importPlatform
+	if idx < 0 || idx >= len(forgePlatforms) {
+		idx = 0
+	}
+	p := forgePlatforms[idx]
+	if p.Provider == forge.Gitea {
+		if h := hostOf(a.settings.GiteaHost); h != "" {
+			p.Host = h
+		}
+	}
+	return p
+}
+
+// fetchPlatformRepos 用令牌调一次平台 API，把「我的仓库」填进导入框。
 //
 // 这是本产品唯一「批量联网」的入口，且只在用户点按钮时发生。结果直接追加成
 // 文本行而不是另开一个选择表格：用户看得见、改得动，也能顺手删掉不想导的。
-func (a *App) fetchMyGitHubRepos() {
-	a.fetchGitHubRepos(func(names []string, err error) {
+func (a *App) fetchPlatformRepos(p forge.Platform, owner string) {
+	if p.Provider == forge.Gitea && p.Host == "" {
+		a.toast("先在设置里填 Gitea 实例地址")
+		return
+	}
+	a.listPlatformRepos(p, owner, func(names []string, err error) {
 		switch {
 		case err != nil:
 			a.toast("读取失败：" + err.Error())
@@ -400,29 +454,29 @@ func (a *App) fetchMyGitHubRepos() {
 	})
 }
 
-// fetchGitHubRepos 后台拉一次「我的仓库」列表，结果回到主线程交给 done。
+// listPlatformRepos 后台拉一次「我的仓库」列表，结果回到主线程交给 done。
 //
-// 导入弹窗与设置页的「测试令牌」共用这一段：区别只在拿到列表后干什么
+// 导入弹窗与设置页的「测试」共用这一段：区别只在拿到列表后干什么
 // （填进导入框 / 只报告数量），联网与错误处理只写一次。
-func (a *App) fetchGitHubRepos(done func([]string, error)) {
-	token := strings.TrimSpace(a.settings.RepoToken)
+func (a *App) listPlatformRepos(p forge.Platform, owner string, done func([]string, error)) {
+	token := a.tokenFor(p.Host)
 	if token == "" {
-		a.toast("请先在设置里填写 GitHub 令牌")
+		a.toast("请先在设置里填写 " + p.Label() + " 令牌")
 		return
 	}
-	owner := strings.TrimSpace(a.settings.RepoOwner)
+	client := forge.New(p, token) // 主线程构造，协程只读
 	a.atlasUI.busy = true
 	go func() {
-		defer logging.Recover("atlas-github-list")
+		defer logging.Recover("atlas-list-repos")
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		list, err := github.New(token).ListRepos(ctx, owner)
+		list, err := client.ListRepos(ctx, owner)
 		names := make([]string, 0, len(list))
 		for _, r := range list {
 			names = append(names, r.FullName)
 		}
 		if err != nil {
-			logging.Errv("atlas", "读取 GitHub 仓库列表失败", err)
+			logging.Errv("atlas", "读取仓库列表失败", err, "platform", p.Label())
 		}
 		mygo.RunOnMain(func() {
 			a.atlasUI.busy = false
@@ -445,6 +499,10 @@ func (a *App) repoDialog(c *ui.Context, t *ui.Theme) {
 
 		dialogRow(c, "名称", func() {
 			ui.TextInput(c, &f.Name).Grow(1).Placeholder("owner/repo")
+		})
+		dialogRow(c, "远端地址", func() {
+			ui.TextInput(c, &f.URL).Grow(1).
+				Placeholder("https://github.com/owner/repo（纯本地仓库可留空）")
 		})
 		dialogRow(c, "归属项目", func() { a.projectSelect(c, "归属项目", &f.Project) })
 		dialogRow(c, "本地目录", func() {
@@ -484,14 +542,23 @@ func (a *App) repoDialog(c *ui.Context, t *ui.Theme) {
 					a.toast("名称不能为空")
 					return
 				}
+				// 平台与地址：填了地址就按地址识别平台；只填名字按 GitHub 理解。
+				rawURL := strings.TrimSpace(f.URL)
+				platform := forge.PlatformForHost("github.com")
+				if p, _, _, ok := forge.Detect(rawURL); ok {
+					platform = p
+				} else if owner, repo, ok := splitOwnerRepo(f.Name); ok {
+					rawURL = platform.WebURL(owner, repo)
+				}
 				r := store.Repo{
 					ID:        f.ID,
 					ProjectID: a.atlas().projectIDByName(f.Project),
 					Name:      strings.TrimSpace(f.Name),
+					Host:      platform.Host,
+					URL:       rawURL,
 					LocalPath: strings.TrimSpace(f.LocalPath),
 					Branch:    strings.TrimSpace(f.Branch),
 					Note:      strings.TrimSpace(f.Note),
-					URL:       githubURLOf(f.Name),
 					Status:    RepoUnknown,
 				}
 				if f.ID != 0 {
@@ -509,7 +576,7 @@ func (a *App) repoDialog(c *ui.Context, t *ui.Theme) {
 	})
 }
 
-// mergeRepo 保留编辑表单没有覆盖的字段（状态、时间戳、URL）。
+// mergeRepo 保留编辑表单没有覆盖的字段（状态、时间戳、Host/URL）。
 func mergeRepo(old, next store.Repo) store.Repo {
 	next.Status = old.Status
 	next.StatusMsg = old.StatusMsg
@@ -523,6 +590,9 @@ func mergeRepo(old, next store.Repo) store.Repo {
 	if next.URL == "" {
 		next.URL = old.URL
 	}
+	if next.Host == "" {
+		next.Host = old.Host
+	}
 	return next
 }
 
@@ -534,15 +604,6 @@ func (a *App) repoByID(id int64) (store.Repo, bool) {
 		}
 	}
 	return store.Repo{}, false
-}
-
-// githubURLOf 由 owner/repo 拼出网页地址；不是这种形式时返回空。
-func githubURLOf(name string) string {
-	owner, repo, ok := github.SplitFull(name)
-	if !ok {
-		return ""
-	}
-	return "https://github.com/" + owner + "/" + repo
 }
 
 // ---- 项目编辑 ----

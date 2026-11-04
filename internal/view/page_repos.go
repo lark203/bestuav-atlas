@@ -28,12 +28,13 @@ import (
 // 固定的「状态/评分/差异/操作」给足宽度，其余一律让位给仓库名——名字被截成
 // 「lark203/bestu…」时两张行看起来一模一样，那才是真的难用。
 var repoCols = []data.Column{
-	{Title: "仓库", Width: 240},
-	{Title: "项目", Width: 90},
-	{Title: "分支", Width: 76},
-	{Title: "状态", Width: 96},
+	{Title: "仓库", Width: 210},
+	{Title: "平台", Width: 76},
+	{Title: "项目", Width: 84},
+	{Title: "分支", Width: 70},
+	{Title: "状态", Width: 92},
 	{Title: "评分", Width: 84},
-	{Title: "差异", Width: 80},
+	{Title: "差异", Width: 76},
 	{Title: "最近提交"},
 	{Title: "操作", Width: 200, End: true},
 }
@@ -175,21 +176,27 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 					}
 				})
 			case 1:
-				ui.Text(c, a.atlas().projectNameOrDash(r.ProjectID)).SingleLine()
+				p := platformForRepo(r)
+				lbl := ui.Text(c, p.Label()).SingleLine().FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+				if p.Host != "" {
+					lbl.Tooltip(p.Host)
+				}
 			case 2:
-				ui.Text(c, firstNonEmpty(r.Branch, "—")).SingleLine().TextColor(t.TextMuted)
+				ui.Text(c, a.atlas().projectNameOrDash(r.ProjectID)).SingleLine()
 			case 3:
+				ui.Text(c, firstNonEmpty(r.Branch, "—")).SingleLine().TextColor(t.TextMuted)
+			case 4:
 				pill := kit.Pill(c, t, r.Status, repoStatusColor(t, r.Status))
 				if r.StatusMsg != "" {
 					pill.Tooltip(r.StatusMsg)
 				}
-			case 4:
+			case 5:
 				stars := ui.Text(c, ratingStars(r.Importance)).
 					FontSize(t.FontSize - 2).TextColor(t.Warning).SingleLine()
 				stars.Tooltip("重要 " + itoa(r.Importance) + " · 可学习 " + itoa(r.Learning) + " · 难度 " + itoa(r.Difficulty))
-			case 5:
-				ui.Text(c, repoDiffText(r)).FontSize(t.FontSize - 2).SingleLine().TextColor(t.TextMuted)
 			case 6:
+				ui.Text(c, repoDiffText(r)).FontSize(t.FontSize - 2).SingleLine().TextColor(t.TextMuted)
+			case 7:
 				ui.Column(c).Gap(1).Children(func() {
 					ui.Text(c, firstNonEmpty(r.LastCommit, "—")).SingleLine().FontSize(t.FontSize - 2)
 					if !r.LastCommitAt.IsZero() {
@@ -197,7 +204,7 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 							FontSize(t.FontSize-2).TextColor(t.TextMuted).SingleLine()
 					}
 				})
-			case 7:
+			case 8:
 				ui.Row(c).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
 					if smallButton(c, "详情").Clicked() {
 						a.openRepoDetail(r)
@@ -247,7 +254,8 @@ func repoDiffText(r store.Repo) string {
 // 文案与动作按钮，不用自己拼）。
 func (a *App) repoEmptyState(c *ui.Context, t *ui.Theme) {
 	_, act := feedback.EmptyState(c, "package", "还没有仓库",
-		"一次可以导入多个：把 owner/repo（每行一个）粘进导入框，或者用 GitHub 令牌直接读取你的仓库列表。",
+		"一次可以导入多个：从本地文件夹导入（自动解析 git 远端），或粘贴 owner/repo / 地址；"+
+			"也可以填好平台令牌后直接读取你的仓库列表。",
 		"导入仓库")
 	if act.Clicked() {
 		a.openImportDialog()

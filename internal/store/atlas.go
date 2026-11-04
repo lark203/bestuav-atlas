@@ -33,6 +33,9 @@ type Repo struct {
 	ProjectID int64
 	Name      string // 展示名，通常 owner/repo
 	URL       string
+	// Host 仓库所在的平台主机（github.com / gitee.com / atomgit.com / 自建 Gitea 域名）。
+	// 空串表示未知（例如只有名字、没有地址的本地仓库）。
+	Host      string
 	LocalPath string
 	Branch    string // 期望分支，空=跟随当前
 	Note      string
@@ -78,7 +81,7 @@ type Todo struct {
 // project 的 "desc" 带双引号：DESC 是 SQLite 关键字。
 const (
 	projectColumns = `id, name, "desc", status, created_at, updated_at`
-	repoColumns    = `id, project_id, name, url, local_path, branch, note,
+	repoColumns    = `id, project_id, name, url, host, local_path, branch, note,
 		importance, learning, difficulty, review,
 		status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
 		checked_at, created_at, updated_at`
@@ -117,7 +120,7 @@ func scanProject(r rowScanner) (Project, error) {
 func scanRepo(r rowScanner) (Repo, error) {
 	var x Repo
 	var lastCommitAt, checkedAt, created, updated string
-	if err := r.Scan(&x.ID, &x.ProjectID, &x.Name, &x.URL, &x.LocalPath, &x.Branch,
+	if err := r.Scan(&x.ID, &x.ProjectID, &x.Name, &x.URL, &x.Host, &x.LocalPath, &x.Branch,
 		&x.Note, &x.Importance, &x.Learning, &x.Difficulty, &x.Review,
 		&x.Status, &x.StatusMsg, &x.Dirty, &x.Ahead, &x.Behind,
 		&x.LastCommit, &lastCommitAt, &checkedAt, &created, &updated); err != nil {
@@ -300,12 +303,12 @@ func (s *Store) CreateRepo(r Repo) (int64, error) {
 	}
 	now := nowText()
 	res, err := s.db.Exec(
-		`INSERT INTO repo(project_id, name, url, local_path, branch, note,
+		`INSERT INTO repo(project_id, name, url, host, local_path, branch, note,
 		                  importance, learning, difficulty, review,
 		                  status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
 		                  checked_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ProjectID, r.Name, r.URL, r.LocalPath, r.Branch, r.Note,
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ProjectID, r.Name, r.URL, r.Host, r.LocalPath, r.Branch, r.Note,
 		r.Importance, r.Learning, r.Difficulty, r.Review,
 		r.Status, r.StatusMsg, r.Dirty, r.Ahead, r.Behind, r.LastCommit, timeText(r.LastCommitAt),
 		timeText(r.CheckedAt), now, now)
@@ -327,12 +330,12 @@ func (s *Store) UpdateRepo(r Repo) error {
 		return fmt.Errorf("store: 仓库名称不能为空")
 	}
 	_, err := s.db.Exec(
-		`UPDATE repo SET project_id = ?, name = ?, url = ?, local_path = ?, branch = ?,
+		`UPDATE repo SET project_id = ?, name = ?, url = ?, host = ?, local_path = ?, branch = ?,
 		        note = ?, importance = ?, learning = ?, difficulty = ?, review = ?,
 		        status = ?, status_msg = ?, dirty = ?, ahead = ?, behind = ?,
 		        last_commit = ?, last_commit_at = ?, checked_at = ?, updated_at = ?
 		  WHERE id = ?`,
-		r.ProjectID, r.Name, r.URL, r.LocalPath, r.Branch, r.Note,
+		r.ProjectID, r.Name, r.URL, r.Host, r.LocalPath, r.Branch, r.Note,
 		r.Importance, r.Learning, r.Difficulty, r.Review,
 		r.Status, r.StatusMsg, r.Dirty, r.Ahead, r.Behind, r.LastCommit, timeText(r.LastCommitAt),
 		timeText(r.CheckedAt), nowText(), r.ID)
@@ -354,6 +357,7 @@ func (s *Store) DeleteRepo(id int64) error {
 }
 
 // SaveRepoStatus 只写检查结果列，不碰 name/url/local_path 等人工维护的字段。
+// Host 也属于人工维护字段（由新建/编辑写入），同样不在这里写。
 //
 // 为什么单独开一个方法：git 检查是定时/按需批量跑的，它拿到的只是状态快照；
 // 若走 UpdateRepo 全量覆盖，一个过期的快照会把用户刚改过的展示名或备注冲掉。

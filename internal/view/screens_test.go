@@ -82,7 +82,7 @@ func TestScreenshots(t *testing.T) {
 		}
 	}
 
-	for _, page := range []string{"home", "todos", "projects", "repos"} {
+	for _, page := range []string{"home", "todos", "projects", "repos", "settings"} {
 		a.page = page
 		save("atlas-" + page)
 	}

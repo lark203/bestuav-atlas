@@ -1,5 +1,33 @@
 # 变更记录
 
+## 0.3.0
+
+多平台仓库与「导入后克隆」。
+
+**新增**
+
+- **多平台支持**：GitHub / Gitee / Gitea（自建实例）/ AtomGit。
+  - 地址按域名自动识别平台（`https://gitee.com/o/r.git`、`git@atomgit.com:o/r.git` 都认）；
+    纯 `owner/repo` 行用导入弹窗里选的平台；
+  - 仓库表格新增「平台」列；详情页显示平台与主机；
+  - 「刷新远端信息」「从远程读 README」「读我的仓库」都按仓库所属平台调用对应 API。
+- **导入后克隆**：导入弹窗新增「导入后克隆」开关，把远程仓库克隆到本地根目录
+  （串行、单仓库 5 分钟超时、目标目录已有内容不覆盖），进度显示在页头；
+  不勾则只登记元数据，状态为「未克隆」。
+- **设置 → 工作区**：按平台分列令牌（GitHub / Gitee / AtomGit / Gitea），Gitea 可填实例地址，
+  每行带「测试」按钮（拉一次仓库列表验证连通性）；GitHub 继续复用配置包同步的 PAT。
+- 编辑仓库新增「远端地址」字段：纯本地仓库也能补登记远端，平台随之识别。
+
+**工程**
+
+- 新包 `internal/forge` 取代 `internal/github`：平台识别（Detect/PlatformForHost）、
+  仓库信息、README、仓库列表四家统一；认证差异（Bearer / access_token / token）封装在包内。
+- `internal/gitx` 新增 `Clone`（目标非空拒绝、父目录自动创建、支持 ctx 取消）。
+- SQLite schema v5：`repo.host`；老库（v3/v4）按 `PRAGMA table_info` 缺列自动升级。
+- 批量操作的令牌改为「批次开始前快照」，协程不再读 `App.settings`（消除数据竞争）。
+- 测试：平台识别与四家 API（httptest）、Clone（本地 bare 仓库）、Host 往返与 v4 迁移、
+  导入时按域名识别平台与返回 id、克隆后状态刷新。
+
 ## 0.2.0
 
 本地仓库导入、五星评分与仓库详情页；待办加了倒计时与四象限。

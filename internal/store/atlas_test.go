@@ -1043,6 +1043,281 @@ func TestMigrateV3Database(t *testing.T) {
 	defer s2.Close()
 }
 
+// TestRepoHostRoundTrip Host 列的往返：新建、单条读回、列表、按项目过滤与整条
+// 更新都要带上；空串（只有名字、没有地址的本地仓库）必须原样存取；SaveRepoStatus
+// 只写状态列，快照里的 Host 不能覆盖库里的值。
+func TestRepoHostRoundTrip(t *testing.T) {
+	s := openTemp(t)
+
+	pID, err := s.CreateProject(Project{Name: "无人机平台"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withHost, err := s.CreateRepo(Repo{
+		ProjectID: pID,
+		Name:      "bestuav/atlas",
+		URL:       "https://github.com/bestuav/atlas.git",
+		Host:      "github.com",
+		LocalPath: `D:\code\atlas`,
+		Status:    "未知",
+	})
+	if err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	localOnly, err := s.CreateRepo(Repo{Name: "local/only", Status: "未知"})
+	if err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+
+	got, ok, err := s.RepoByID(withHost)
+	if err != nil || !ok {
+		t.Fatalf("RepoByID: ok=%v err=%v", ok, err)
+	}
+	if got.Host != "github.com" {
+		t.Errorf("Host = %q，期望 github.com", got.Host)
+	}
+	// 空 Host 读回来必须是空串（不是 NULL、也不是别的脏值）。
+	if only, _, err := s.RepoByID(localOnly); err != nil || only.Host != "" {
+		t.Errorf("空 Host 应原样读回空串: host=%q err=%v", only.Host, err)
+	}
+
+	// 列表与按项目过滤两条路径都必须带上 Host。
+	wantHost := map[int64]string{withHost: "github.com", localOnly: ""}
+	list, err := s.ListRepos()
+	if err != nil || len(list) != 2 {
+		t.Fatalf("ListRepos: n=%d err=%v", len(list), err)
+	}
+	for _, r := range list {
+		if r.Host != wantHost[r.ID] {
+			t.Errorf("列表里 id=%d 的 Host = %q，期望 %q", r.ID, r.Host, wantHost[r.ID])
+		}
+	}
+	byProject, err := s.ReposByProject(pID)
+	if err != nil || len(byProject) != 1 || byProject[0].Host != "github.com" {
+		t.Errorf("ReposByProject 未带上 Host: %+v err=%v", byProject, err)
+	}
+
+	// 整条更新：换平台，再清空（回到「未知」）。
+	got.Host = "gitee.com"
+	if err := s.UpdateRepo(got); err != nil {
+		t.Fatalf("UpdateRepo: %v", err)
+	}
+	if after, _, _ := s.RepoByID(withHost); after.Host != "gitee.com" {
+		t.Errorf("更新 Host 未生效: %q", after.Host)
+	}
+	got.Host = ""
+	if err := s.UpdateRepo(got); err != nil {
+		t.Fatalf("UpdateRepo: %v", err)
+	}
+	if after, _, _ := s.RepoByID(withHost); after.Host != "" {
+		t.Errorf("清空 Host 未生效: %q", after.Host)
+	}
+
+	// SaveRepoStatus 不写 Host：快照里塞进来的主机名不该覆盖库里的值。
+	got.Host = "atomgit.com"
+	if err := s.UpdateRepo(got); err != nil {
+		t.Fatalf("UpdateRepo: %v", err)
+	}
+	if err := s.SaveRepoStatus(withHost, Repo{Host: "被覆盖的主机", Status: "正常"}); err != nil {
+		t.Fatalf("SaveRepoStatus: %v", err)
+	}
+	after, _, _ := s.RepoByID(withHost)
+	if after.Host != "atomgit.com" {
+		t.Errorf("SaveRepoStatus 不应写 Host，实际 %q", after.Host)
+	}
+	if after.Status != "正常" {
+		t.Errorf("状态列应被更新，实际 %q", after.Status)
+	}
+}
+
+// TestMigrateV4Database 老库升级：手工建一个 v4 结构的库（已有评分/评价与
+// 待办重要/紧急，但 repo 还没有 host，schema_meta 是 4），写入一行；用新版
+// Open 打开后应自动补 host 列——旧行 Host 为空串、v4 的旧数据原样保留、
+// 之后能写新值，再打开一次也不报错（补列幂等）。
+func TestMigrateV4Database(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v4.db")
+
+	// 刻意绕开 Open：模拟 v4 版本写出来的文件。
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("打开 v4 库失败: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	v4 := []string{
+		`CREATE TABLE schema_meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+		`CREATE TABLE project (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			name       TEXT NOT NULL,
+			"desc"     TEXT NOT NULL DEFAULT '',
+			status     TEXT NOT NULL DEFAULT '进行中',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE repo (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id     INTEGER NOT NULL DEFAULT 0,
+			name           TEXT NOT NULL,
+			url            TEXT NOT NULL DEFAULT '',
+			local_path     TEXT NOT NULL DEFAULT '',
+			branch         TEXT NOT NULL DEFAULT '',
+			note           TEXT NOT NULL DEFAULT '',
+			importance     INTEGER NOT NULL DEFAULT 0,
+			learning       INTEGER NOT NULL DEFAULT 0,
+			difficulty     INTEGER NOT NULL DEFAULT 0,
+			review         TEXT NOT NULL DEFAULT '',
+			status         TEXT NOT NULL DEFAULT '未知',
+			status_msg     TEXT NOT NULL DEFAULT '',
+			dirty          INTEGER NOT NULL DEFAULT 0,
+			ahead          INTEGER NOT NULL DEFAULT 0,
+			behind         INTEGER NOT NULL DEFAULT 0,
+			last_commit    TEXT NOT NULL DEFAULT '',
+			last_commit_at TEXT NOT NULL DEFAULT '',
+			checked_at     TEXT NOT NULL DEFAULT '',
+			created_at     TEXT NOT NULL,
+			updated_at     TEXT NOT NULL
+		)`,
+		`CREATE TABLE todo (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			title      TEXT NOT NULL,
+			note       TEXT NOT NULL DEFAULT '',
+			project_id INTEGER NOT NULL DEFAULT 0,
+			repo_id    INTEGER NOT NULL DEFAULT 0,
+			priority   INTEGER NOT NULL DEFAULT 1,
+			important  INTEGER NOT NULL DEFAULT 0,
+			urgent     INTEGER NOT NULL DEFAULT 0,
+			status     TEXT NOT NULL DEFAULT '待办',
+			due_at     TEXT NOT NULL DEFAULT '',
+			done_at    TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+	}
+	for _, q := range v4 {
+		if _, err := db.Exec(q); err != nil {
+			_ = db.Close()
+			t.Fatalf("建 v4 表失败: %v", err)
+		}
+	}
+
+	const oldReview = "升级前的评价\n第二行"
+	ts := nowText()
+	if _, err := db.Exec(
+		`INSERT INTO repo(project_id, name, url, local_path, branch, note,
+		                  importance, learning, difficulty, review,
+		                  status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
+		                  checked_at, created_at, updated_at)
+		 VALUES(0, 'old/repo', 'https://github.com/old/repo.git', 'D:\code\old', 'main', '老备注',
+		        3, 4, 2, ?, '正常', '工作区干净', 0, 0, 0, '', '', '', ?, ?)`,
+		oldReview, ts, ts); err != nil {
+		_ = db.Close()
+		t.Fatalf("写入 v4 仓库失败: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO todo(title, note, project_id, repo_id, priority, important, urgent, status,
+		                  due_at, done_at, created_at, updated_at)
+		 VALUES('老待办', '升级前写入', 0, 0, 2, 1, 0, '待办', '', '', ?, ?)`, ts, ts); err != nil {
+		_ = db.Close()
+		t.Fatalf("写入 v4 待办失败: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO schema_meta(key, value) VALUES('schema_version', '4')`); err != nil {
+		_ = db.Close()
+		t.Fatalf("写入 v4 版本号失败: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭 v4 库失败: %v", err)
+	}
+
+	// 用当前版本打开，升级应自动发生。
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("打开 v4 库应自动迁移: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if v, _, err := s.Flag("schema_version"); err != nil || v != schemaVersion {
+		t.Fatalf("升级后版本应为 %s，实际 %q err=%v", schemaVersion, v, err)
+	}
+
+	// 补列走的是 PRAGMA table_info 缺列检测：host 必须真的长出来了。
+	cols, err := s.tableColumns("repo")
+	if err != nil {
+		t.Fatalf("读取 repo 表结构: %v", err)
+	}
+	if !cols["host"] {
+		t.Fatalf("升级后 repo 应补上 host 列，实际列 = %v", cols)
+	}
+
+	repos, err := s.ListRepos()
+	if err != nil || len(repos) != 1 || repos[0].Name != "old/repo" {
+		t.Fatalf("升级后老仓库应能读出: rows=%v err=%v", repos, err)
+	}
+	r := repos[0]
+	if r.Host != "" {
+		t.Errorf("升级后旧行 Host 应为空串（未知），实际 %q", r.Host)
+	}
+	// v4 已有的数据不能被补列过程弄丢。
+	if r.URL != "https://github.com/old/repo.git" || r.LocalPath != `D:\code\old` ||
+		r.Importance != 3 || r.Learning != 4 || r.Difficulty != 2 || r.Review != oldReview {
+		t.Errorf("升级后 v4 旧数据丢失: %+v", r)
+	}
+
+	todos, err := s.ListTodos()
+	if err != nil || len(todos) != 1 || todos[0].Title != "老待办" {
+		t.Fatalf("升级后老待办应能读出: rows=%v err=%v", todos, err)
+	}
+	if !todos[0].Important || todos[0].Urgent {
+		t.Errorf("升级后待办的重要/紧急应保留: %+v", todos[0])
+	}
+
+	// 升级后 Host 可写：旧行补写、再清空、新建行直接带上。
+	r.Host = "github.com"
+	if err := s.UpdateRepo(r); err != nil {
+		t.Fatalf("升级后写 Host: %v", err)
+	}
+	if after, _, _ := s.RepoByID(r.ID); after.Host != "github.com" {
+		t.Errorf("升级后写 Host 未生效: %q", after.Host)
+	}
+	r.Host = ""
+	if err := s.UpdateRepo(r); err != nil {
+		t.Fatalf("升级后清空 Host: %v", err)
+	}
+	if after, _, _ := s.RepoByID(r.ID); after.Host != "" {
+		t.Errorf("升级后清空 Host 未生效: %q", after.Host)
+	}
+
+	newID, err := s.CreateRepo(Repo{
+		Name: "new/repo",
+		URL:  "https://gitee.com/new/repo.git",
+		Host: "gitee.com",
+	})
+	if err != nil {
+		t.Fatalf("升级后 CreateRepo: %v", err)
+	}
+	if created, _, _ := s.RepoByID(newID); created.Host != "gitee.com" {
+		t.Errorf("升级后新建仓库的 Host 丢失: %q", created.Host)
+	}
+
+	// 再打开一次：补列是幂等的，不应报 duplicate column name。
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("重复打开升级后的库: %v", err)
+	}
+	defer s2.Close()
+	if v, _, err := s2.Flag("schema_version"); err != nil || v != schemaVersion {
+		t.Errorf("重开后版本应保持 %s，实际 %q err=%v", schemaVersion, v, err)
+	}
+	if again, _, _ := s2.RepoByID(newID); again.Host != "gitee.com" {
+		t.Errorf("重开后 Host 应持久化: %q", again.Host)
+	}
+}
+
 // todoTitles 把待办标题拼出来，排序失败时打印完整实际顺序。
 func todoTitles(list []Todo) []string {
 	out := make([]string, 0, len(list))

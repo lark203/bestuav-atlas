@@ -84,6 +84,13 @@ type Settings struct {
 	// 存两份只会让用户改一处、忘一处。
 	WorkRoot string `json:"workRoot"`
 
+	// 其它代码托管平台的令牌：一个平台一个，互不通用（Gitee 的私人令牌不能访问
+	// GitHub）。都只存本机、不随配置包导出。Gitea 的实例地址各人不同，单列 GiteaHost。
+	GiteeToken   string `json:"giteeToken"`
+	AtomGitToken string `json:"atomGitToken"`
+	GiteaHost    string `json:"giteaHost"`
+	GiteaToken   string `json:"giteaToken"`
+
 	// ---- 伴生桌宠 ----
 	// PetEnabled 是否显示桌宠（无边框透明置顶小窗，见 internal/view/pet.go）。
 	PetEnabled bool `json:"petEnabled"`

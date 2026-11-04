@@ -10,7 +10,6 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 
-	"bestuav-atlas/internal/github"
 	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/readme"
 	"bestuav-atlas/internal/store"
@@ -117,8 +116,8 @@ func (a *App) readmeCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 		kit.CardHeader(c, t, "README",
 			firstNonEmpty(u.readmeSource(), "本地仓库根目录里的 README，只读"),
 			func() {
-				if u.readmeFrom == "remote" || a.settings.RepoToken != "" {
-					if ui.Button(c, "从 GitHub 读取").Clicked() && !u.busy {
+				if u.readmeFrom == "remote" || a.tokenFor(platformForRepo(r).Host) != "" {
+					if ui.Button(c, "从远程读取").Clicked() && !u.busy {
 						a.fetchRemoteReadme(r)
 					}
 				}
@@ -133,7 +132,7 @@ func (a *App) readmeCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 		case u.readmeErr != "" && u.readmeText == "":
 			ui.Text(c, u.readmeErr).TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 			ui.Row(c).Children(func() {
-				if a.settings.RepoToken != "" && ui.Button(c, "从 GitHub 读取").Clicked() {
+				if ui.Button(c, "从远程读取").Clicked() && !u.busy {
 					a.fetchRemoteReadme(r)
 				}
 			})
@@ -202,6 +201,8 @@ func (a *App) reviewCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 func (a *App) repoMetaCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 	kit.Card(c, t, func() {
 		kit.CardHeader(c, t, "仓库信息", "", nil)
+		p := platformForRepo(r)
+		kit.KV(c, t, "平台", p.Label()+"（"+firstNonEmpty(p.Host, "未知")+"）")
 		kit.KV(c, t, "远端", firstNonEmpty(r.URL, "—"))
 		kit.KV(c, t, "本地目录", firstNonEmpty(r.LocalPath, "未设置"))
 		kit.KV(c, t, "分支", firstNonEmpty(r.Branch, "—"))
@@ -247,21 +248,23 @@ func (a *App) loadLocalReadme(r store.Repo) {
 	u.readmeFrom = "local"
 }
 
-// fetchRemoteReadme 用 GitHub API 拉 README（手动触发）。
+// fetchRemoteReadme 用平台 API 拉 README（手动触发）。
 func (a *App) fetchRemoteReadme(r store.Repo) {
-	owner, repo, ok := githubOwnerRepo(r)
+	p := platformForRepo(r)
+	owner, repo, ok := forgeOwnerRepo(r, p)
 	if !ok {
 		a.toast("无法从地址解析出 owner/repo")
 		return
 	}
-	token := strings.TrimSpace(a.settings.RepoToken)
+	// 客户端在主线程构造好再进协程：forge.Client 只读，协程里用它是安全的。
+	client := a.forgeClient(p)
 	u := &a.atlasUI
 	u.busy = true
 	go func() {
 		defer logging.Recover("atlas-readme")
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		text, err := github.New(token).Readme(ctx, owner, repo)
+		text, err := client.Readme(ctx, owner, repo)
 		mygo.RunOnMain(func() {
 			u.busy = false
 			if err != nil {
@@ -286,7 +289,7 @@ func (u *atlasUI) readmeSource() string {
 	case "local":
 		return "本地 " + u.readmeName
 	case "remote":
-		return "来自 GitHub"
+		return "来自远程仓库"
 	default:
 		return ""
 	}
@@ -300,12 +303,4 @@ func capReadme(text string) string {
 		return text
 	}
 	return string(rs[:limit]) + "\n\n---\n\n（README 过长，已截断显示前 4 万字符）"
-}
-
-// githubOwnerRepo 从仓库登记里解析 owner/repo。
-func githubOwnerRepo(r store.Repo) (owner, repo string, ok bool) {
-	if o, n, k := github.ParseRemote(r.URL); k {
-		return o, n, true
-	}
-	return github.SplitFull(r.Name)
 }

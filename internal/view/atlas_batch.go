@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -11,8 +12,8 @@ import (
 
 	"github.com/egoist/mygo"
 
+	"bestuav-atlas/internal/forge"
 	"bestuav-atlas/internal/gitx"
-	"bestuav-atlas/internal/github"
 	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/store"
 )
@@ -32,7 +33,8 @@ const (
 	batchInspect batchKind = iota // 只读本地 git 状态
 	batchPull                     // fetch + pull --ff-only
 	batchCommitPush               // add -A + commit + push
-	batchRemote                   // 调 GitHub API 拉远端元信息
+	batchRemote                   // 调平台 API 拉远端元信息
+	batchClone                    // 从远端克隆到本地根目录
 )
 
 // label 动作名，用于页头进度与任务记录。
@@ -44,17 +46,64 @@ func (k batchKind) label() string {
 		return "批量提交并推送"
 	case batchRemote:
 		return "刷新远端信息"
+	case batchClone:
+		return "克隆仓库"
 	default:
 		return "刷新仓库状态"
 	}
 }
 
-// batchTimeout 单个仓库 I/O 的上限：网络操作给足 90 秒，本地操作 15 秒足够。
+// batchTimeout 单个仓库 I/O 的上限：网络操作给足 90 秒，克隆给 5 分钟
+// （大仓库在慢网下确实会超过 90 秒），本地操作 15 秒足够。
 func batchTimeout(k batchKind) time.Duration {
-	if k == batchPull || k == batchCommitPush || k == batchRemote {
+	switch k {
+	case batchClone:
+		return 5 * time.Minute
+	case batchPull, batchCommitPush, batchRemote:
 		return 90 * time.Second
+	default:
+		return 15 * time.Second
 	}
-	return 15 * time.Second
+}
+
+// tokenSet 是主线程读好的令牌快照。
+//
+// 为什么不在协程里直接读 a.settings：设置可能正被用户编辑（主线程写），
+// 跨线程读同一份结构在 -race 下是数据竞争。批次开始前拍一份快照，协程只用它。
+type tokenSet struct {
+	github, gitee, atomgit, gitea, giteaHost string
+}
+
+func (a *App) tokensSnapshot() tokenSet {
+	return tokenSet{
+		github:    strings.TrimSpace(a.settings.RepoToken),
+		gitee:     strings.TrimSpace(a.settings.GiteeToken),
+		atomgit:   strings.TrimSpace(a.settings.AtomGitToken),
+		gitea:     strings.TrimSpace(a.settings.GiteaToken),
+		giteaHost: hostOf(a.settings.GiteaHost),
+	}
+}
+
+// tokenFor 按平台取令牌（与 App.tokenFor 同规则，但只读快照）。
+func (ts tokenSet) tokenFor(host string) string {
+	switch host {
+	case "github.com":
+		return ts.github
+	case "gitee.com":
+		return ts.gitee
+	case "atomgit.com":
+		return ts.atomgit
+	default:
+		return ts.gitea
+	}
+}
+
+// client 按平台构造 API 客户端（自建 Gitea 用快照里的实例地址）。
+func (ts tokenSet) client(p forge.Platform) *forge.Client {
+	if p.Provider == forge.Gitea && ts.giteaHost != "" {
+		p.Host = ts.giteaHost
+	}
+	return forge.New(p, ts.tokenFor(p.Host))
 }
 
 // runRepoBatch 串行处理一批仓库。
@@ -76,12 +125,15 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 		a.toast("先选中要处理的仓库")
 		return
 	}
-	// 「刷新远端信息」必须联网，没令牌时提前拦住：否则每个仓库各报一次
-	// 「请填写令牌」，用户要点掉 N 条提示才知道问题在哪。
-	token := strings.TrimSpace(a.settings.RepoToken)
-	if kind == batchRemote && token == "" {
-		a.toast("刷新远端信息需要 GitHub 令牌：设置 → 工作区")
-		return
+	// 「刷新远端信息」必须联网：没令牌时提前拦住，否则每个仓库各报一次
+	// 「请填写令牌」，用户要点掉 N 条提示才知道问题在哪。Gitea 还要实例地址。
+	tokens := a.tokensSnapshot()
+	if kind == batchRemote {
+		p := platformForRepo(repos[0])
+		if tokens.tokenFor(p.Host) == "" {
+			a.toast("刷新远端信息需要 " + p.Label() + " 令牌：设置 → 工作区")
+			return
+		}
 	}
 
 	label := fmt.Sprintf("%s（%d 个）", kind.label(), len(repos))
@@ -99,7 +151,7 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 		var firstErr string
 		for i, r := range repos {
 			ctx, cancel := context.WithTimeout(context.Background(), batchTimeout(kind))
-			err := a.batchOne(ctx, kind, r, commitMsg, token)
+			err := a.batchOne(ctx, kind, r, commitMsg, tokens)
 			cancel()
 			if err != nil {
 				failed++
@@ -144,7 +196,7 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 }
 
 // batchOne 处理单个仓库；返回该仓库的错误（汇总展示用）。
-func (a *App) batchOne(ctx context.Context, kind batchKind, r store.Repo, commitMsg, token string) error {
+func (a *App) batchOne(ctx context.Context, kind batchKind, r store.Repo, commitMsg string, tokens tokenSet) error {
 	switch kind {
 	case batchPull:
 		if strings.TrimSpace(r.LocalPath) == "" {
@@ -184,7 +236,10 @@ func (a *App) batchOne(ctx context.Context, kind batchKind, r store.Repo, commit
 		return nil
 
 	case batchRemote:
-		return a.refreshRemoteOne(ctx, r, token)
+		return a.refreshRemoteOne(ctx, r, tokens)
+
+	case batchClone:
+		return a.cloneOne(ctx, r)
 
 	default:
 		a.refreshRepoStatus(r)
@@ -192,36 +247,100 @@ func (a *App) batchOne(ctx context.Context, kind batchKind, r store.Repo, commit
 	}
 }
 
-// refreshRemoteOne 用 GitHub API 读一次远端元信息。
+// cloneOne 把一个仓库克隆到它的本地目录。
 //
-// 本地 git 能回答「我领先/落后远端几个提交」，但回答不了「远端仓库本身怎么样」：
-// 默认分支、最近一次推送、star、未关闭 issue。未克隆的仓库更是连本地状态都没有，
-// 只有 API 能告诉我们它还活着。结果写进 status_msg（本地状态词不动）。
-func (a *App) refreshRemoteOne(ctx context.Context, r store.Repo, token string) error {
-	owner, name, ok := github.ParseRemote(r.URL)
-	if !ok {
-		owner, name, ok = github.SplitFull(r.Name)
+// 目录已有内容就不动（用户可能已经手动克隆过，或用本地导入登记了已有目录）——
+// 这时只刷新一次状态，把结果当作「已克隆」。
+func (a *App) cloneOne(ctx context.Context, r store.Repo) error {
+	url := strings.TrimSpace(r.URL)
+	if url == "" {
+		return errors.New("没有远端地址")
 	}
-	if !ok {
-		return fmt.Errorf("无法从地址解析出 owner/repo")
+	dir := strings.TrimSpace(r.LocalPath)
+	if dir == "" {
+		dir = a.repoLocalPath(r.Name)
+		r.LocalPath = dir
 	}
-	info, err := github.New(token).Repo(ctx, owner, name)
-	if err != nil {
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		a.refreshRepoStatus(r)
+		return nil
+	}
+	if err := gitx.Clone(ctx, url, dir); err != nil {
 		return err
 	}
-	info2 := r
-	info2.StatusMsg = fmt.Sprintf("远端 %s · 最近推送 %s · ★%d · issues %d",
-		firstNonEmpty(info.DefaultBranch, "main"), timeAgo(info.PushedAt), info.Stars, info.OpenIssues)
-	info2.CheckedAt = time.Now()
-	if r.Status == RepoOK || r.Status == RepoUnknown {
-		info2.Status = RepoOK
-	}
+	// 克隆完把本地目录与分支写回登记，状态也顺手算出来。
+	next := r
+	next = a.inspectRepo(next)
 	if a.store != nil {
-		if err := a.store.SaveRepoStatus(r.ID, info2); err != nil {
+		if err := a.store.UpdateRepo(next); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// cloneRepos 批量克隆（导入时勾了「顺手 clone」就走这里）。
+func (a *App) cloneRepos(ids []int64) {
+	a.runRepoBatch(batchClone, ids, "")
+}
+
+// refreshRemoteOne 用平台 API 读一次远端元信息。
+//
+// 本地 git 能回答「我领先/落后远端几个提交」，但回答不了「远端仓库本身怎么样」：
+// 默认分支、最近一次推送、star、未关闭 issue。未克隆的仓库更是连本地状态都没有，
+// 只有 API 能告诉我们它还活着。结果写进 status_msg（本地状态词不动）。
+//
+// 平台由仓库登记里的 Host / URL 决定：GitHub / Gitee / Gitea / AtomGit 各用各的
+// 端点与令牌，见 internal/forge。
+func (a *App) refreshRemoteOne(ctx context.Context, r store.Repo, tokens tokenSet) error {
+	p := platformForRepo(r)
+	owner, name, ok := forgeOwnerRepo(r, p)
+	if !ok {
+		return fmt.Errorf("无法从地址解析出 owner/repo")
+	}
+	info, err := tokens.client(p).Repo(ctx, owner, name)
+	if err != nil {
+		return err
+	}
+	next := r
+	next.StatusMsg = fmt.Sprintf("%s 远端 %s · 最近推送 %s · ★%d · issues %d",
+		p.Label(), firstNonEmpty(info.DefaultBranch, "main"), timeAgo(info.PushedAt), info.Stars, info.OpenIssues)
+	next.CheckedAt = time.Now()
+	if r.Status == RepoOK || r.Status == RepoUnknown {
+		next.Status = RepoOK
+	}
+	if a.store != nil {
+		if err := a.store.SaveRepoStatus(r.ID, next); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// forgeOwnerRepo 从仓库登记里解析 owner/repo；URL 解析不出来时退回名字。
+func forgeOwnerRepo(r store.Repo, def forge.Platform) (owner, repo string, ok bool) {
+	if _, o, n, k := forge.Detect(r.URL); k {
+		return o, n, true
+	}
+	if _, o, n, k := forge.Detect(r.Name); k {
+		return o, n, true
+	}
+	// 纯 owner/repo（没有域名）：按给定平台理解。
+	if o, n, k := splitOwnerRepo(r.Name); k {
+		return o, n, true
+	}
+	return "", "", false
+}
+
+// splitOwnerRepo 只认「恰好两段、都不为空」的 owner/repo。
+func splitOwnerRepo(s string) (owner, repo string, ok bool) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, ".git")
+	parts := strings.Split(s, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 // reposByIDs 按 id 取出仓库快照（保持调用方给的顺序，去重）。
@@ -357,7 +476,10 @@ func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped i
 			continue
 		}
 		name := ""
-		if owner, repo, ok := github.ParseRemote(st.RemoteURL); ok {
+		// platform 只在本条目录内有效：没有远端的本地仓库不猜平台（Host 留空）。
+		var platform forge.Platform
+		if p, owner, repo, ok := forge.Detect(st.RemoteURL); ok {
+			platform = p
 			name = owner + "/" + repo
 		}
 		if name == "" {
@@ -370,14 +492,12 @@ func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped i
 		r := a.inspectRepo(store.Repo{
 			ProjectID: projectID,
 			Name:      name,
+			Host:      platform.Host,
 			URL:       st.RemoteURL,
 			LocalPath: dir,
 			Branch:    st.Branch,
 			Status:    RepoUnknown,
 		})
-		if r.URL == "" {
-			r.URL = githubURLOf(name)
-		}
 		if _, err := a.store.CreateRepo(r); err != nil {
 			logging.Errv("atlas", "导入本地仓库失败", err, "dir", dir)
 			skip(filepath.Base(dir) + "：写库失败")
@@ -395,12 +515,15 @@ func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped i
 
 // importRepos 把一批「owner/repo」或仓库地址登记进库。
 //
-// 导入只写元数据（名字、地址、本地目录），状态留给随后的批量探测——导入时不该
-// 逐个去跑 git（用户可能一次贴 20 个仓库，界面会卡住）。
-func (a *App) importRepos(lines []string, projectID int64, root string) (added, skipped int) {
+// 导入只写元数据（名字、平台、地址、本地目录），状态留给随后的批量探测——导入时
+// 不该逐个去跑 git（用户可能一次贴 20 个仓库，界面会卡住）。返回新登记的 id，
+// 供「顺手 clone」使用。
+//
+// def 是「纯 owner/repo 行」（没有域名）时假定的平台，来自导入弹窗里的平台选择。
+func (a *App) importRepos(lines []string, projectID int64, root string, def forge.Platform) (added, skipped int, ids []int64) {
 	if a.store == nil {
 		a.toast("本次运行不落库，无法导入")
-		return 0, 0
+		return 0, 0, nil
 	}
 	d := a.atlas()
 	existing := make(map[string]bool, len(d.repos))
@@ -412,10 +535,7 @@ func (a *App) importRepos(lines []string, projectID int64, root string) (added, 
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		owner, name, ok := github.ParseRemote(line)
-		if !ok {
-			owner, name, ok = github.SplitFull(line)
-		}
+		platform, owner, name, ok := parseRepoLine(line, def)
 		if !ok {
 			skipped++
 			continue
@@ -428,20 +548,37 @@ func (a *App) importRepos(lines []string, projectID int64, root string) (added, 
 		r := store.Repo{
 			ProjectID: projectID,
 			Name:      full,
-			URL:       "https://github.com/" + full,
+			Host:      platform.Host,
+			URL:       platform.WebURL(owner, name),
 			LocalPath: repoPathUnder(root, full),
 			Status:    RepoUnknown,
 		}
-		if _, err := a.store.CreateRepo(r); err != nil {
+		id, err := a.store.CreateRepo(r)
+		if err != nil {
 			logging.Errv("atlas", "导入仓库失败", err, "repo", full)
 			skipped++
 			continue
 		}
 		existing[strings.ToLower(full)] = true
+		ids = append(ids, id)
 		added++
 	}
 	a.reloadAtlas()
-	return added, skipped
+	return added, skipped, ids
+}
+
+// parseRepoLine 解析一行导入文本：完整地址走 forge.Detect，纯 owner/repo 用默认平台。
+//
+// 平台不是「猜出来的」就不猜：一行 `a/b` 到底是 GitHub 还是 Gitee，取决于用户在
+// 导入弹窗里选的是哪个平台。
+func parseRepoLine(line string, def forge.Platform) (forge.Platform, string, string, bool) {
+	if p, owner, repo, ok := forge.Detect(line); ok {
+		return p, owner, repo, true
+	}
+	if owner, repo, ok := splitOwnerRepo(line); ok {
+		return def, owner, repo, true
+	}
+	return forge.Platform{}, "", "", false
 }
 
 // repoPathUnder 在指定根目录下算出仓库的本地目录；root 为空时返回空（调用方

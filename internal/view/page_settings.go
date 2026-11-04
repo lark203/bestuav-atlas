@@ -43,6 +43,11 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 		pages := group == settingsGroupPages
 
 		if general {
+			// ===== 工作区（仓库管理的本机参数）=====
+			// 放在最前：这是本产品最常改的一组设置（根目录 + 各平台令牌），
+			// 不该让人先滚过外观、背景、窗口才看得到。
+			kit.Section(c, t, "工作区", func() { a.workspaceSection(c, t) })
+
 			// ===== 外观 =====
 			kit.Section(c, t, "外观", func() {
 				settingRow(c, t, "主题", func() {
@@ -123,9 +128,6 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 
 			// ===== 桌宠 =====
 			kit.Section(c, t, "桌宠", func() { a.petSection(c, t) })
-
-			// ===== 工作区（仓库管理的本机参数）=====
-			kit.Section(c, t, "工作区", func() { a.workspaceSection(c, t) })
 
 		}
 
