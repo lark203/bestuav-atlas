@@ -34,9 +34,9 @@ import (
 // 固定列给足宽度，只有「最近提交」吃剩余空间；名字被截成「lark203/bestu…」
 // 时两行看起来一模一样，那才是真的难用。
 //
-// repoTableWideEnough 是「所有列都能摆下」的内容区宽度：固定列合计 934，
+// repoTableWideEnough 是「所有列都能摆下」的内容区宽度：固定列合计 950，
 // 「最近提交」至少 150，再加卡片内边距。窄于它时筛选条会提示可以左右滚动。
-const repoTableWideEnough = 1120
+const repoTableWideEnough = 1136
 
 var repoCols = []ui.TableColumn{
 	{Title: "", Width: 42, Fixed: true},
@@ -48,7 +48,10 @@ var repoCols = []ui.TableColumn{
 	{Title: "评分", Width: 84, Fixed: true},
 	{Title: "差异", Width: 76, Fixed: true},
 	{Title: "最近提交", MinWidth: 150},
-	{Title: "操作", Width: 200, Fixed: true, Align: ui.End},
+	// 216 而不是 200：四个行内按钮（详情/拉取/提交/删除）加上单元格左右
+	// 内边距已经接近 200，按 200 分栏时最右侧「删除」会被列边框裁掉一点。
+	// 再给右侧留出滚动条覆盖的余量。
+	{Title: "操作", Width: 216, Fixed: true, Align: ui.End},
 }
 
 // ratingStars 把 0–5 的评分画成五颗星（0 分显示「—」，表示还没评）。
@@ -254,7 +257,7 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 				}
 			})
 		case 9:
-			ui.Row(c).Gap(4).AlignItems(ui.Center).Justify(ui.End).Children(func() {
+			ui.Row(c).Gap(2).AlignItems(ui.Center).Justify(ui.End).Children(func() {
 				if smallButton(c, "详情").Clicked() {
 					a.openRepoDetail(r)
 				}
