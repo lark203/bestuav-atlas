@@ -431,30 +431,91 @@ func (a *App) pickLocalRepos(projectID int64) {
 			case len(dirs) == 0:
 				// 取消：什么都不做，弹窗保持打开，用户可以继续贴地址。
 			default:
-				added, skipped, firstSkip := a.importLocalRepos(dirs, projectID)
-				msg := "已从本地导入 " + itoa(added) + " 个仓库"
-				if skipped > 0 {
-					msg += "，跳过 " + itoa(skipped) + " 个"
-					if firstSkip != "" {
-						msg += "（" + firstSkip + "）"
-					}
-				}
-				a.toast(msg)
-				if added > 0 {
-					a.closeAtlasDialog()
-				}
+				// 选择框已经关闭，剩下的是逐个目录跑 git：交给重量级任务
+				// （全窗口遮罩 + 进度），期间界面不可操作，避免用户以为卡死。
+				a.startLocalImport(dirs, projectID)
 			}
 			a.requestFrame()
 		})
 	}()
 }
 
-// importLocalRepos 解析并登记一批本地目录；返回成功数、跳过数与第一条跳过原因。
+// startLocalImport 在重量级任务里解析并登记一批本地目录。
+//
+// 重量级而不是轻量级：这一步会逐个目录读 .git（几十个目录时可能要数秒），
+// 且中途不该让用户再点一次导入——遮罩 + 进度条正好表达「正在干活，别动」。
+func (a *App) startLocalImport(dirs []string, projectID int64) {
+	if a.heavyRunning || a.taskRunning {
+		a.toast("已有任务在执行，请稍候")
+		return
+	}
+	if a.store == nil {
+		a.toast("本次运行不落库，无法导入")
+		return
+	}
+	// 快照既有的仓库登记：去重逻辑在协程里跑，不能再去读 a.atlas()。
+	existing := append([]store.Repo(nil), a.atlas().repos...)
+	label := "从本地导入（" + itoa(len(dirs)) + " 个文件夹）"
+	// 导入弹窗先关掉：接下来是遮罩的世界，弹窗留在下面没有意义。
+	a.closeAtlasDialog()
+	a.heavyRunning = true
+	a.heavyProgress = 0
+	a.heavyLabel = label
+	a.requestFrame()
+
+	go func() {
+		defer logging.Recover("atlas-local-import")
+
+		added, skipped, firstSkip, failed := a.importLocalCore(dirs, projectID, existing,
+			func(done, total int) {
+				p := float64(done) / float64(total)
+				mygo.RunOnMain(func() {
+					a.heavyProgress = p
+					a.requestFrame()
+				})
+			})
+
+		mygo.RunOnMain(func() {
+			a.heavyRunning = false
+			a.heavyProgress = 0
+			a.heavyLabel = ""
+			a.reloadAtlas()
+
+			status := "已完成"
+			if failed > 0 {
+				status = "失败"
+			}
+			a.pushTaskRow(label+"（导入 "+itoa(added)+" / 跳过 "+itoa(skipped)+"）", "重量级", status)
+			msg := "已从本地导入 " + itoa(added) + " 个仓库"
+			if skipped > 0 {
+				msg += "，跳过 " + itoa(skipped) + " 个"
+				if firstSkip != "" {
+					msg += "（" + firstSkip + "）"
+				}
+			}
+			a.toast(msg)
+			a.requestFrame()
+		})
+	}()
+}
+
+// importLocalRepos 解析并登记一批本地目录（同步版，测试与兜底用）。
 func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped int, firstSkip string) {
-	d := a.atlas()
-	byPath := make(map[string]bool, len(d.repos))
-	byName := make(map[string]bool, len(d.repos))
-	for _, r := range d.repos {
+	existing := append([]store.Repo(nil), a.atlas().repos...)
+	added, skipped, firstSkip, _ = a.importLocalCore(dirs, projectID, existing, nil)
+	a.reloadAtlas()
+	return added, skipped, firstSkip
+}
+
+// importLocalCore 逐目录解析并写库；不碰 a.atlas() 与 reloadAtlas，因此可以在
+// 协程里跑（store 自身是串行化的）。done 用于推进进度（可空）。
+//
+// 返回成功数、跳过数、第一条跳过原因、写库失败数。
+func (a *App) importLocalCore(dirs []string, projectID int64, existing []store.Repo,
+	done func(done, total int)) (added, skipped int, firstSkip string, failed int) {
+	byPath := make(map[string]bool, len(existing))
+	byName := make(map[string]bool, len(existing))
+	for _, r := range existing {
 		byPath[strings.ToLower(filepath.Clean(r.LocalPath))] = true
 		byName[strings.ToLower(r.Name)] = true
 	}
@@ -464,15 +525,17 @@ func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped i
 			firstSkip = reason
 		}
 	}
-	for _, dir := range dirs {
+	for i, dir := range dirs {
 		dir = filepath.Clean(strings.TrimSpace(dir))
 		if byPath[strings.ToLower(dir)] {
 			skip(filepath.Base(dir) + "：已在列表里")
+			reportProgress(done, i+1, len(dirs))
 			continue
 		}
 		st := gitx.Inspect(dir)
 		if !st.IsRepo {
 			skip(filepath.Base(dir) + "：不是 git 仓库")
+			reportProgress(done, i+1, len(dirs))
 			continue
 		}
 		name := ""
@@ -487,6 +550,7 @@ func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped i
 		}
 		if byName[strings.ToLower(name)] {
 			skip(name + "：同名仓库已存在")
+			reportProgress(done, i+1, len(dirs))
 			continue
 		}
 		r := a.inspectRepo(store.Repo{
@@ -500,15 +564,24 @@ func (a *App) importLocalRepos(dirs []string, projectID int64) (added, skipped i
 		})
 		if _, err := a.store.CreateRepo(r); err != nil {
 			logging.Errv("atlas", "导入本地仓库失败", err, "dir", dir)
+			failed++
 			skip(filepath.Base(dir) + "：写库失败")
+			reportProgress(done, i+1, len(dirs))
 			continue
 		}
 		byPath[strings.ToLower(dir)] = true
 		byName[strings.ToLower(name)] = true
 		added++
+		reportProgress(done, i+1, len(dirs))
 	}
-	a.reloadAtlas()
-	return added, skipped, firstSkip
+	return added, skipped, firstSkip, failed
+}
+
+// reportProgress 安全地回调进度（done 可能为 nil）。
+func reportProgress(done func(done, total int), i, n int) {
+	if done != nil {
+		done(i, n)
+	}
 }
 
 // ---- 远程批量导入 ----

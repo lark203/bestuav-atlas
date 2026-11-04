@@ -38,16 +38,19 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 			a.setSettingsGroup(group)
 		}
 		general := group == settingsGroupGeneral
+		workspace := group == settingsGroupWorkspace
 		shortcuts := group == settingsGroupShortcuts
 		about := group == settingsGroupAbout
 		pages := group == settingsGroupPages
 
-		if general {
-			// ===== 工作区（仓库管理的本机参数）=====
-			// 放在最前：这是本产品最常改的一组设置（根目录 + 各平台令牌），
-			// 不该让人先滚过外观、背景、窗口才看得到。
-			kit.Section(c, t, "工作区", func() { a.workspaceSection(c, t) })
+		// ===== 工作区（仓库管理的本机参数）=====
+		// 单独一页：根目录与四个平台的令牌属于「业务配置」，和主题/字体这类
+		// 外观偏好混在一起时，用户要滚过整页才能找到它。
+		if workspace {
+			a.workspaceSection(c, t)
+		}
 
+		if general {
 			// ===== 外观 =====
 			kit.Section(c, t, "外观", func() {
 				settingRow(c, t, "主题", func() {
@@ -244,6 +247,7 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 // 设置页的分组。顺序即分段控件里的顺序。
 const (
 	settingsGroupGeneral   = iota // 常规：外观 / 背景 / 窗口与关闭 / 启动
+	settingsGroupWorkspace        // 工作区：仓库根目录 + 各平台令牌
 	settingsGroupShortcuts        // 快捷键
 	settingsGroupAbout            // 关于与诊断
 	settingsGroupPages            // 页面：各页面自己声明的设置（没有时不显示这一页）
@@ -255,7 +259,7 @@ const (
 // 对用户没有意义，还会让别人以为页面设置是必须的。页面是否注册在编译期就定了，
 // 所以这个列表在一次运行里不会变。
 func settingsGroupLabels() []string {
-	labels := []string{"常规", "快捷键", "关于与诊断"}
+	labels := []string{"常规", "工作区", "快捷键", "关于与诊断"}
 	if len(pageSettingItems()) > 0 {
 		labels = append(labels, "页面")
 	}
@@ -281,7 +285,10 @@ func (a *App) setSettingsGroup(g int) {
 }
 
 // settingsGroupKey 当前分组在页面私有状态里的键名。
-const settingsGroupKey = "group"
+//
+// 带 -v2：分组顺序在 v0.3.0 变过（插入「工作区」），旧的下标会被解读成别的页，
+// 换个键名等于「老用户这次回到默认页」，比停在一个奇怪的页面上好。
+const settingsGroupKey = "group-v2"
 
 // settingsOpenKey 分区折叠状态在页面私有状态里的键名。
 const settingsOpenKey = "section-open"

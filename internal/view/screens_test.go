@@ -100,4 +100,11 @@ func TestScreenshots(t *testing.T) {
 	a.closeAtlasDialog()
 	a.openCommitDialog([]int64{1, 2})
 	save("atlas-dialog-commit")
+
+	// 重量级任务：本地导入时的全窗口遮罩 + 进度。
+	a.closeAtlasDialog()
+	a.heavyRunning = true
+	a.heavyProgress = 0.45
+	a.heavyLabel = "从本地导入（6 个文件夹）"
+	save("atlas-heavy-import")
 }

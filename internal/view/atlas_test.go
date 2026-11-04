@@ -97,7 +97,7 @@ func TestPagesRenderWithData(t *testing.T) {
 		{"todos", []string{"待办", "把仓库页接上批量推送", "详细填写…"}},
 		{"projects", []string{"项目", "星图", "1 仓库"}},
 		{"repos", []string{"lark203/bestuav-atlas", RepoDirty, "刷新状态", "3 改"}},
-		{"settings", []string{"工作区", "仓库根目录", "GitHub 令牌"}},
+		{"settings", []string{"常规", "工作区", "快捷键", "关于与诊断"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.page, func(t *testing.T) {
@@ -113,6 +113,23 @@ func TestPagesRenderWithData(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestWorkspaceSettingsTab 工作区单独一页：根目录与四个平台的令牌都在这里。
+func TestWorkspaceSettingsTab(t *testing.T) {
+	a, _ := newTestApp(t)
+	a.pageStat(settingsPageID).data[settingsGroupKey] = settingsGroupWorkspace
+
+	tt := renderPage(t, a, "settings")
+	for _, want := range []string{"仓库根目录", "GitHub 令牌", "Gitee 令牌", "AtomGit 令牌", "Gitea 实例"} {
+		if !tt.HasText(want) {
+			t.Errorf("工作区页缺少 %q；实际文本：%v", want, tt.Texts())
+		}
+	}
+	// 常规页的外观设置不应同时出现（一次只渲染一组）。
+	if tt.HasText("字体大小") {
+		t.Errorf("工作区页不应渲染常规页的外观设置")
 	}
 }
 

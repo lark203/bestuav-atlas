@@ -393,9 +393,13 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 					msg += "，跳过 " + itoa(skipped) + " 个（重复或格式不对）"
 				}
 				a.toast(msg)
+				// 列表这时已经出现（导入只写元数据），随后的克隆/探测走轻量任务：
+				// 页头进度条 + 界面照常可用。
 				switch {
 				case clone && len(ids) > 0:
 					a.cloneRepos(ids)
+				case len(ids) > 0:
+					a.runRepoBatch(batchInspect, ids, "")
 				default:
 					a.inspectAllAsync()
 				}
