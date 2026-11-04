@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -672,5 +673,36 @@ func TestGiteaScheme(t *testing.T) {
 	// 只给 host（来自设置）时默认 https。
 	if got := PlatformForHost("gitea.example.com").WebURL("a", "b"); got != "https://gitea.example.com/a/b" {
 		t.Errorf("未指定协议时应默认 https：%q", got)
+	}
+}
+
+// TestGiteaScopeError 令牌缺少 read:user 时，403 要被翻译成「照着改」的提示，
+// 而不是把平台的英文原文直接糊到界面上。
+func TestGiteaScopeError(t *testing.T) {
+	c := newForgeTestClient(t, Platform{Provider: Gitea, Host: "gitea.example.com"}, "tok",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/user/repos" {
+				t.Errorf("路径应为 /user/repos，实际 %s", r.URL.Path)
+			}
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"token does not have at least one of required scope(s), required=[read:user], token scope=write:repository"}`)
+		})
+
+	_, err := c.ListRepos(context.Background(), "")
+	if err == nil {
+		t.Fatal("应返回权限错误")
+	}
+	var se *ScopeError
+	if !errors.As(err, &se) {
+		t.Fatalf("应返回 *ScopeError，实际 %T: %v", err, err)
+	}
+	if len(se.Scopes) != 1 || se.Scopes[0] != "read:user" {
+		t.Errorf("缺少的 scope 解析错误：%+v", se.Scopes)
+	}
+	msg := err.Error()
+	for _, want := range []string{"令牌权限不足", "read:user", "用户名"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("错误提示缺少 %q：%s", want, msg)
+		}
 	}
 }

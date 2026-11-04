@@ -520,6 +520,25 @@ func (c *Client) request(ctx context.Context, u, accept string) (*http.Request, 
 	return req, nil
 }
 
+// ScopeError 令牌权限不足：403 且响应体点名了缺少的 scope。
+//
+// Gitea 的「列出我的仓库」（GET /user/repos）要求 read:user；只给了
+// write:repository 的令牌会拿到 403。这个错误要能让人**照着改**，
+// 所以把缺的 scope 单独抽出来，界面可以提示「补权限」或「填用户名走公开列表」。
+type ScopeError struct {
+	Platform string   // 平台展示名，如 Gitea（gitea.example.com）
+	Scopes   []string // 需要的权限，如 read:user
+	Detail   string   // 平台原始 message（便于排障）
+}
+
+func (e *ScopeError) Error() string {
+	if len(e.Scopes) == 0 {
+		return e.Platform + " 令牌权限不足：" + e.Detail
+	}
+	return fmt.Sprintf("%s 令牌权限不足：需要 %s。给令牌补上该权限，或在导入弹窗里填写用户名（改用公开仓库列表）",
+		e.Platform, strings.Join(e.Scopes, "、"))
+}
+
 // statusError 把 HTTP 状态码翻译成用户能照做的中文提示。
 func (c *Client) statusError(code int, raw []byte) error {
 	label := c.platform().APILabel()
@@ -533,12 +552,42 @@ func (c *Client) statusError(code int, raw []byte) error {
 			strings.Contains(lower, "ratelimit") || strings.Contains(string(raw), "限流") {
 			return fmt.Errorf("%s API 限流，请稍后再试或配置令牌", label)
 		}
+		if scopes := requiredScopes(raw); len(scopes) > 0 {
+			return &ScopeError{Platform: label, Scopes: scopes, Detail: apiMessage(raw)}
+		}
 		return fmt.Errorf("%s 返回 %d：%s", label, code, apiMessage(raw))
 	case http.StatusNotFound:
 		return fmt.Errorf("仓库不存在或无权限访问")
 	default:
 		return fmt.Errorf("%s 返回 %d：%s", label, code, apiMessage(raw))
 	}
+}
+
+// requiredScopes 从 403 响应体里解析缺少的权限。
+//
+// Gitea 的文案形如：
+//
+//	token does not have at least one of required scope(s), required=[read:user], token scope=write:repository
+//
+// 只取 required=[...] 这一段；解析不出来就返回空（按普通 403 处理）。
+func requiredScopes(raw []byte) []string {
+	msg := apiMessage(raw)
+	start := strings.Index(msg, "required=[")
+	if start < 0 {
+		return nil
+	}
+	rest := msg[start+len("required=["):]
+	end := strings.Index(rest, "]")
+	if end < 0 {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(rest[:end], ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // apiMessage 从错误响应体里取 message；不是 JSON 就退回原文。

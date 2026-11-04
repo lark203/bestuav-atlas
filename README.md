@@ -43,6 +43,11 @@
 
 ## 三、界面
 
+应用图标：深空蓝底 + 四颗星连成的星座，主星是金色四芒星——「星图」= 星空 + 图册。
+脚本 `scripts/make-icon.py` 可复现（4 倍超采样，输出 `resources/icon.png`，并生成尺寸预览）。
+
+![应用图标](docs/icon-preview.png)
+
 截图由 `ui.NewTester` 离屏渲染生成（脚本见「本地开发」），不依赖显示器。
 
 | 总览 | 待办 |
@@ -111,8 +116,8 @@ bestuav-atlas/
 │   ├── readme/                # 读本地仓库根目录的 README
 │   ├── settings/              # settings.json（含工作目录与各平台令牌）
 │   └── ui/                    # 设计系统：kit（卡片/药丸/间距）、icons、canvas
-├── docs/                      # 立项与数据模型、使用说明、截图
-└── scripts/                   # 打包脚本、newpage 页面生成器
+├── docs/                      # 立项与数据模型、使用说明、截图、图标预览
+└── scripts/                   # 打包脚本、newpage 页面生成器、make-icon.py（图标生成）
 ```
 
 ## 七、数据模型（SQLite schema v5）

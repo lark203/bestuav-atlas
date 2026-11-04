@@ -52,18 +52,21 @@ func (a *App) workspaceSection(c *ui.Context, t *ui.Theme) {
 		"写 https:// 就用 https。").
 		TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 	a.tokenRow(c, t, "Gitea 令牌", &a.settings.GiteaToken, forgePlatforms[2],
-		"访问令牌：read:repository")
+		"read:user（列我的仓库）+ read:repository（读仓库/README）")
 
 	ui.Text(c, "令牌只在点按钮时使用（读取仓库列表 / 刷新远端信息 / 读 README）；"+
 		"克隆与推送走本机 git 凭据，星图不保存 git 密码。").
 		TextColor(t.TextMuted).FontSize(t.FontSize-2).Margin(0, 0, 0, 4)
 
-	settingRow(c, t, "GitHub 用户名", func() {
+	settingRow(c, t, "默认用户名", func() {
 		if ui.TextInput(c, &a.settings.RepoOwner).Width(220).
-			Placeholder("owner（留空则列当前令牌的仓库）").Changed() {
+			Placeholder("owner（各平台通用，留空 = 当前令牌账号）").Changed() {
 			a.persist()
 		}
 	})
+	ui.Text(c, "会带进「导入仓库」弹窗，并决定「读我的仓库」走公开列表还是当前令牌账号；"+
+		"Gitea 令牌没有 read:user 时填它即可。").
+		TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 }
 
 // tokenRow 一行「平台令牌 + 测试」。

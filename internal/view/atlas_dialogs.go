@@ -148,6 +148,10 @@ func (a *App) openImportDialog() {
 	if u.importProject == "" {
 		u.importProject = "未归属"
 	}
+	// 用户名默认沿用设置里的「默认用户名」：多数平台上它就是自己的账号。
+	if strings.TrimSpace(u.importOwner) == "" {
+		u.importOwner = strings.TrimSpace(a.settings.RepoOwner)
+	}
 }
 
 // openRepoDialog 打开仓库编辑；r.ID 为 0 时是新建。
@@ -343,9 +347,16 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, "只影响「纯 owner/repo」行的归属；带域名的地址按域名自动识别").
 				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 		})
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "用户名").Shrink(0).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+			ui.TextInput(c, &a.atlasUI.importOwner).Width(220).Shrink(0).
+				Placeholder("owner；留空 = 当前令牌账号")
+		})
+		ui.Text(c, "Gitea 令牌没有 read:user 权限时，在这里填用户名即可改用公开仓库列表。").
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 		ui.TextArea(c, &a.atlasUI.importText).
 			Placeholder("owner/repo\nhttps://github.com/owner/repo\ngit@atomgit.com:owner/repo.git\n…").
-			Height(100)
+			Height(90)
 
 		// 两个短字段并排（CrychicUI 的 FormRow 会在窄窗口里自动竖排）。
 		form.FormRow(c, []func(){
@@ -448,6 +459,7 @@ func (a *App) fetchPlatformRepos(p forge.Platform, owner string) {
 	a.listPlatformRepos(p, owner, func(names []string, err error) {
 		switch {
 		case err != nil:
+			// ScopeError 的文案里已经写了「补 scope 或填用户名」，这里原样提示即可。
 			a.toast("读取失败：" + err.Error())
 		case len(names) == 0:
 			a.toast("这个账号下没有读到仓库")

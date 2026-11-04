@@ -1,5 +1,19 @@
 # 变更记录
 
+## 0.4.0
+
+- **新应用图标**：深空蓝圆角底 + 四星连成的星座，主星为金色四芒星；4 倍超采样绘制，
+  16–256 px 都可辨。新增 `scripts/make-icon.py`（可复现，含尺寸预览 `docs/icon-preview.png`），
+  `resources/icon.png` 已替换（窗口、托盘、安装包共用）。
+- **修复 Gitea「读取我的仓库」403**：Gitea 的 `/user/repos` 要求 `read:user`，
+  只有 `write:repository` 的令牌会被拒。现在：
+  - 403 且响应体列出 `required=[…]` 时返回 `*forge.ScopeError`，提示里直接写清
+    「补哪个 scope」或「在导入弹窗填用户名，改走公开列表」；
+  - 导入弹窗新增「用户名」输入（默认取设置里的「默认用户名」），填了就按
+    `/users/<owner>/repos` 读取，不需要 `read:user`；
+  - 设置页令牌提示补上所需 scope（Gitea：`read:user` + `read:repository`），
+    「GitHub 用户名」改名为「默认用户名」并说明用途。
+
 ## 0.3.3
 
 发版链路修复（首次推 tag 暴露的问题）。
