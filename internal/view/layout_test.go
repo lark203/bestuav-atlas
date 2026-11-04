@@ -163,6 +163,83 @@ func TestRepoProjectCellPicksProject(t *testing.T) {
 	}
 }
 
+// TestDueTodosSelection 只挑「已到期、未完成、未提醒」的待办。
+func TestDueTodosSelection(t *testing.T) {
+	now := time.Now()
+	todos := []store.Todo{
+		{ID: 1, Title: "刚到期", DueAt: now},
+		{ID: 2, Title: "已过期", DueAt: now.Add(-time.Minute)},
+		{ID: 3, Title: "未来", DueAt: now.Add(time.Minute)},
+		{ID: 4, Title: "已完成", DueAt: now.Add(-time.Minute), Status: TodoDone},
+		{ID: 5, Title: "已提醒", DueAt: now.Add(-time.Minute), NotifiedAt: now.Add(-time.Minute)},
+		{ID: 6, Title: "无期限"},
+	}
+	got := dueTodos(todos, now)
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
+		t.Fatalf("到期筛选不对：%+v", got)
+	}
+}
+
+// TestTodoDialogUsesPickers 编辑有期限的待办时，弹出的是日期/时间选择器，
+// 不再出现手填日期的文本框。
+func TestTodoDialogUsesPickers(t *testing.T) {
+	a, st := newTestApp(t)
+	seedAtlas(t, a, st)
+	a.page = "todos"
+	a.openTodoDialog(a.atlas().todos[0])
+
+	tt := renderPageSized(t, a, "todos", 1440, 900)
+	for _, want := range []string{"截止日期", "截止时间", "设置截止时间"} {
+		if !tt.HasText(want) {
+			t.Errorf("待办弹窗缺少截止时间选择器 %q；实际文本：%v", want, tt.Texts())
+		}
+	}
+	if tt.HasText("2026-11-30 18:00 或 2026-11-30，可空") {
+		t.Error("不应再出现手填截止时间的占位提示")
+	}
+}
+
+// TestUnassignedCardButtons 未归属区按实际内容给入口：有仓库去仓库页，
+// 有待办去待办页，两者都有就两个都给。
+func TestUnassignedCardButtons(t *testing.T) {
+	cases := []struct {
+		name               string
+		repo, todo         bool
+		wantRepo, wantTodo bool
+	}{
+		{"只有仓库", true, false, true, false},
+		{"只有待办", false, true, false, true},
+		{"两者都有", true, true, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, st := newTestApp(t)
+			if _, err := st.CreateProject(store.Project{Name: "有项目", Status: "进行中"}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.repo {
+				if _, err := st.CreateRepo(store.Repo{Name: "a/b", Status: RepoUnknown}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.todo {
+				if _, err := st.CreateTodo(store.Todo{Title: "未归属待办", Status: TodoOpen}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a.reloadAtlas()
+
+			tt := renderPageSized(t, a, "projects", 1440, 900)
+			if got := tt.HasText("去仓库页"); got != tc.wantRepo {
+				t.Errorf("去仓库页按钮 = %v，期望 %v", got, tc.wantRepo)
+			}
+			if got := tt.HasText("去待办页"); got != tc.wantTodo {
+				t.Errorf("去待办页按钮 = %v，期望 %v", got, tc.wantTodo)
+			}
+		})
+	}
+}
+
 // TestSettingsToneWraps 九个色调在窄窗口里必须换行显示，而不是被 Segmented 裁掉。
 func TestSettingsToneWraps(t *testing.T) {
 	a, _ := newTestApp(t)

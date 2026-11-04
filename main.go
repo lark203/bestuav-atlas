@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -218,6 +219,11 @@ func main() {
 		// 点系统通知时把窗口唤回来（任务完成通知的 ID 固定为 task-done）。
 		mygo.App.OnNotificationClick(func(id string) {
 			mygo.RunOnMain(func() {
+				// 待办到期通知（单条 todo-due-<id> / 汇总 todo-due-summary）点击后
+				// 直接回到待办页，而不是停在当前页。
+				if strings.HasPrefix(id, "todo-due") {
+					a.SetPage("todos")
+				}
 				if mainWin != nil {
 					mainWin.Show()
 				}

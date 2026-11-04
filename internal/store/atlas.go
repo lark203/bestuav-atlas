@@ -71,8 +71,11 @@ type Todo struct {
 	Status    string    // 待办 / 进行中 / 已完成
 	DueAt     time.Time // 零值 = 无期限
 	DoneAt    time.Time
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// NotifiedAt 是「这条待办的到期提醒已经发过」的时刻；零值 = 还没提醒。
+	// 改截止时间会清空它，让新时刻还能再提醒一次。
+	NotifiedAt time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // 三张表的列清单。查询与 scan 共用同一份顺序，改表时只改这里，避免
@@ -86,7 +89,7 @@ const (
 		status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
 		checked_at, created_at, updated_at`
 	todoColumns = `id, title, note, project_id, repo_id, priority, important, urgent,
-		status, due_at, done_at, created_at, updated_at`
+		status, due_at, done_at, notified_at, created_at, updated_at`
 )
 
 // rowScanner 让 QueryRow 与 Rows 共用同一套扫描逻辑。
@@ -135,13 +138,14 @@ func scanRepo(r rowScanner) (Repo, error) {
 
 func scanTodo(r rowScanner) (Todo, error) {
 	var t Todo
-	var due, done, created, updated string
+	var due, done, notified, created, updated string
 	if err := r.Scan(&t.ID, &t.Title, &t.Note, &t.ProjectID, &t.RepoID,
-		&t.Priority, &t.Important, &t.Urgent, &t.Status, &due, &done, &created, &updated); err != nil {
+		&t.Priority, &t.Important, &t.Urgent, &t.Status, &due, &done, &notified, &created, &updated); err != nil {
 		return Todo{}, err
 	}
 	t.DueAt = parseTime(due)
 	t.DoneAt = parseTime(done)
+	t.NotifiedAt = parseTime(notified)
 	t.CreatedAt = parseTime(created)
 	t.UpdatedAt = parseTime(updated)
 	return t, nil
@@ -456,7 +460,8 @@ func (s *Store) TodoByID(id int64) (Todo, bool, error) {
 
 // CreateTodo 新建待办，返回自增 id；时间戳用服务端时间。
 //
-// DueAt / DoneAt 的零值写空串，分别表示「无期限」「未完成」。
+// DueAt / DoneAt / NotifiedAt 的零值写空串，分别表示「无期限」「未完成」
+// 「还没提醒」。
 func (s *Store) CreateTodo(t Todo) (int64, error) {
 	if strings.TrimSpace(t.Title) == "" {
 		return 0, fmt.Errorf("store: 待办标题不能为空")
@@ -464,10 +469,10 @@ func (s *Store) CreateTodo(t Todo) (int64, error) {
 	now := nowText()
 	res, err := s.db.Exec(
 		`INSERT INTO todo(title, note, project_id, repo_id, priority, important, urgent, status,
-		                  due_at, done_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                  due_at, done_at, notified_at, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent, t.Status,
-		timeText(t.DueAt), timeText(t.DoneAt), now, now)
+		timeText(t.DueAt), timeText(t.DoneAt), timeText(t.NotifiedAt), now, now)
 	if err != nil {
 		return 0, fmt.Errorf("store: 写入待办失败: %w", err)
 	}
@@ -485,12 +490,15 @@ func (s *Store) UpdateTodo(t Todo) error {
 	if strings.TrimSpace(t.Title) == "" {
 		return fmt.Errorf("store: 待办标题不能为空")
 	}
+	due := timeText(t.DueAt)
 	_, err := s.db.Exec(
 		`UPDATE todo SET title = ?, note = ?, project_id = ?, repo_id = ?, priority = ?,
-		        important = ?, urgent = ?, status = ?, due_at = ?, done_at = ?, updated_at = ?
+		        important = ?, urgent = ?, status = ?, due_at = ?, done_at = ?,
+		        notified_at = CASE WHEN due_at <> ? THEN '' ELSE notified_at END,
+		        updated_at = ?
 		  WHERE id = ?`,
 		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent,
-		t.Status, timeText(t.DueAt), timeText(t.DoneAt), nowText(), t.ID)
+		t.Status, due, timeText(t.DoneAt), due, nowText(), t.ID)
 	if err != nil {
 		return fmt.Errorf("store: 更新待办失败: %w", err)
 	}
@@ -517,6 +525,21 @@ func (s *Store) SetTodoStatus(id int64, status string) error {
 		`UPDATE todo SET status = ?, done_at = ?, updated_at = ? WHERE id = ?`,
 		status, doneAt, now, id); err != nil {
 		return fmt.Errorf("store: 更新待办状态失败: %w", err)
+	}
+	return nil
+}
+
+// MarkTodoNotified 记下某条待办的到期提醒已发送的时刻。
+//
+// 只写 notified_at，不动 updated_at：这是系统的提醒状态，不是用户编辑；
+// updated_at 继续只表示「用户改过这条待办」。
+func (s *Store) MarkTodoNotified(id int64, at time.Time) error {
+	if id <= 0 {
+		return fmt.Errorf("store: 标记待办提醒缺少有效 id")
+	}
+	if _, err := s.db.Exec(
+		`UPDATE todo SET notified_at = ? WHERE id = ?`, timeText(at), id); err != nil {
+		return fmt.Errorf("store: 标记待办提醒失败: %w", err)
 	}
 	return nil
 }

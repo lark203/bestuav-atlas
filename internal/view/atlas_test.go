@@ -601,20 +601,18 @@ func TestQuadrantAndCountdown(t *testing.T) {
 	}
 }
 
-// TestParseDueDate 截止时间支持「日期 + 时刻」。
-func TestParseDueDate(t *testing.T) {
-	withTime, err := parseDueDate("2026-11-30 18:30")
-	if err != nil {
-		t.Fatalf("带时刻解析失败: %v", err)
+// TestDefaultTodoDue 新待办默认的截止时刻是「未来的下一个 18:00」。
+func TestDefaultTodoDue(t *testing.T) {
+	now := time.Now()
+	due := defaultTodoDue()
+	if !due.After(now) {
+		t.Errorf("默认截止时间应在未来：now=%v due=%v", now, due)
 	}
-	if withTime.Hour() != 18 || withTime.Minute() != 30 {
-		t.Errorf("时刻没解析出来：%v", withTime)
+	if due.Hour() != 18 || due.Minute() != 0 {
+		t.Errorf("默认截止时间应为 18:00，实际 %v", due)
 	}
-	if _, err := parseDueDate("2026-11-30"); err != nil {
-		t.Errorf("纯日期应可解析: %v", err)
-	}
-	if _, err := parseDueDate("下周一"); err == nil {
-		t.Error("无法识别的写法应报错")
+	if due.Sub(now) > 25*time.Hour {
+		t.Errorf("默认截止时间离现在太远：%v", due.Sub(now))
 	}
 }
 

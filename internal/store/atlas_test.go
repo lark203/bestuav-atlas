@@ -491,6 +491,35 @@ func TestTodoCRUDAndOrdering(t *testing.T) {
 		t.Errorf("更新应刷新 updated_at: before=%v after=%v", beforeUpdate, after.UpdatedAt)
 	}
 
+	// 到期提醒状态：MarkTodoNotified 只写 notified_at，不动 updated_at；
+	// 改截止时间会清空它，改别的字段则保留。
+	if err := s.MarkTodoNotified(lastID, testInstant); err != nil {
+		t.Fatalf("MarkTodoNotified: %v", err)
+	}
+	notified, _, _ := s.TodoByID(lastID)
+	if !notified.NotifiedAt.Equal(testInstant) {
+		t.Errorf("notified_at 未写入: %v", notified.NotifiedAt)
+	}
+	if !notified.UpdatedAt.Equal(after.UpdatedAt) {
+		t.Errorf("提醒状态不应改 updated_at: before=%v after=%v", after.UpdatedAt, notified.UpdatedAt)
+	}
+	notified.Title = "改标题但不动期限"
+	if err := s.UpdateTodo(notified); err != nil {
+		t.Fatalf("UpdateTodo(保留提醒): %v", err)
+	}
+	kept, _, _ := s.TodoByID(lastID)
+	if !kept.NotifiedAt.Equal(testInstant) {
+		t.Errorf("不改期限时提醒状态应保留: %v", kept.NotifiedAt)
+	}
+	kept.DueAt = kept.DueAt.Add(time.Hour)
+	if err := s.UpdateTodo(kept); err != nil {
+		t.Fatalf("UpdateTodo(改期限): %v", err)
+	}
+	changed, _, _ := s.TodoByID(lastID)
+	if !changed.NotifiedAt.IsZero() {
+		t.Errorf("改截止时间应清空提醒状态: %v", changed.NotifiedAt)
+	}
+
 	// 校验。
 	if _, err := s.CreateTodo(Todo{Title: "  "}); err == nil {
 		t.Error("空标题应被拒绝")

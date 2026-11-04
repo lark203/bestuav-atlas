@@ -39,7 +39,8 @@ import (
 // 3：新增 project / repo / todo
 // 4：仓库评分与评价、待办重要/紧急
 // 5：仓库所在平台主机
-const schemaVersion = "5"
+// 6：待办到期提醒的已通知时刻（notified_at）
+const schemaVersion = "6"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -232,11 +233,12 @@ func (s *Store) migrate() error {
 			priority   INTEGER NOT NULL DEFAULT 1,
 			important  INTEGER NOT NULL DEFAULT 0,
 			urgent     INTEGER NOT NULL DEFAULT 0,
-			status     TEXT NOT NULL DEFAULT '待办',
-			due_at     TEXT NOT NULL DEFAULT '',
-			done_at    TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
+			status      TEXT NOT NULL DEFAULT '待办',
+			due_at      TEXT NOT NULL DEFAULT '',
+			done_at     TEXT NOT NULL DEFAULT '',
+			notified_at TEXT NOT NULL DEFAULT '',
+			created_at  TEXT NOT NULL,
+			updated_at  TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_todo_status ON todo(status, due_at)`,
 	}
@@ -294,6 +296,7 @@ func (s *Store) addMissingColumns() error {
 		{"todo", []addColumn{
 			{"important", `important INTEGER NOT NULL DEFAULT 0`},
 			{"urgent", `urgent INTEGER NOT NULL DEFAULT 0`},
+			{"notified_at", `notified_at TEXT NOT NULL DEFAULT ''`},
 		}},
 	}
 	for _, p := range plan {

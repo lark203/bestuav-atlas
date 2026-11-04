@@ -122,7 +122,10 @@ type todoForm struct {
 	Important bool
 	Urgent    bool
 	Status    string
-	Due       string
+	// DueAt 是草稿里的截止时刻；DueSet=false 表示「无期限」（DueAt 可能仍
+	// 保留一个默认值，供用户重新勾选时使用，但保存时不写库）。
+	DueAt  time.Time
+	DueSet bool
 }
 
 // 待办的三个状态。
@@ -189,13 +192,16 @@ func (a *App) openProjectDialog(p store.Project) {
 // openTodoDialog 打开待办编辑；td.ID 为 0 时是新建。
 func (a *App) openTodoDialog(td store.Todo) {
 	d := a.atlas()
-	due := ""
-	if !td.DueAt.IsZero() {
-		due = td.DueAt.Local().Format("2006-01-02")
-	}
 	status := td.Status
 	if status == "" {
 		status = TodoOpen
+	}
+	// 编辑有期限的待办时沿用原值；新建（或无期限）时给一个「下一个 18:00」
+	// 作为勾选「设置截止时间」后的起点。DueSet 决定保存时是否写库。
+	due := td.DueAt
+	dueSet := !due.IsZero()
+	if !dueSet {
+		due = defaultTodoDue()
 	}
 	a.atlasUI.todoForm = todoForm{
 		ID:        td.ID,
@@ -207,11 +213,24 @@ func (a *App) openTodoDialog(td store.Todo) {
 		Important: td.Important,
 		Urgent:    td.Urgent,
 		Status:    status,
-		Due:       due,
+		DueAt:     due,
+		DueSet:    dueSet,
 	}
 	a.atlasUI.dialog = "todo"
 	a.atlasUI.dialogPage = a.page
 	a.atlasUI.confirmTodo = 0
+}
+
+// defaultTodoDue 新待办默认的截止时刻：下一个 18:00。
+//
+// 已经是 18:00 之后（或正好到点）就顺延到明天，避免一打开就是「已逾期」。
+func defaultTodoDue() time.Time {
+	now := time.Now()
+	due := time.Date(now.Year(), now.Month(), now.Day(), 18, 0, 0, 0, now.Location())
+	if !due.After(now) {
+		due = due.AddDate(0, 0, 1)
+	}
+	return due
 }
 
 // openCommitDialog 打开「批量提交并推送」确认框。
@@ -833,8 +852,21 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 			}
 		})
 		dialogRow(c, "截止时间", func() {
-			ui.TextInput(c, &f.Due).Width(200).
-				Placeholder("2026-11-30 18:00 或 2026-11-30，可空")
+			choice.Toggle(c, "设置截止时间", &f.DueSet)
+			if !f.DueSet {
+				ui.Text(c, "不设截止时间（待办列表里显示为无期限）").
+					TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+				return
+			}
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				// mygo 原生日期/时间选择器：DateInput 点开日历选日期，
+				// TimeInput 的时/分/上下午可以直接步进或键盘输入。
+				ui.DateInput(c, &f.DueAt).Label("截止日期")
+				ui.TimeInput(c, &f.DueAt).Label("截止时间")
+				if ui.Button(c, "清除").Clicked() {
+					f.DueSet = false
+				}
+			})
 		})
 	}, func() {
 		dialogButtons(c, func() {
@@ -859,10 +891,12 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 					a.toast("标题不能为空")
 					return
 				}
-				due, err := parseDueDate(f.Due)
-				if err != nil {
-					a.toast(err.Error())
-					return
+				var due time.Time
+				if f.DueSet {
+					due = f.DueAt
+					if due.IsZero() {
+						due = defaultTodoDue()
+					}
 				}
 				td := store.Todo{
 					ID:        f.ID,
@@ -883,39 +917,6 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 			}
 		})
 	})
-}
-
-// parseDueDate 解析截止时间：支持「2026-11-30 18:00」（带时刻，用于倒计时）、
-// 「2026-11-30」、「2026/11/30」与「11-30」（默认今年）。空串表示没有期限。
-func parseDueDate(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return time.Time{}, nil
-	}
-	for _, layout := range []string{
-		"2006-01-02 15:04",
-		"2006/01/02 15:04",
-		"2006-01-02T15:04",
-		"2006-01-02",
-		"2006/01/02",
-		"01-02",
-	} {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
-			if layout == "01-02" {
-				now := time.Now()
-				t = time.Date(now.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
-			}
-			return t, nil
-		}
-	}
-	return time.Time{}, &dateError{s: s}
-}
-
-// dateError 日期格式错误的提示。
-type dateError struct{ s string }
-
-func (e *dateError) Error() string {
-	return "日期格式不认识：" + e.s + "（用 2026-11-30 这种写法）"
 }
 
 // ---- 批量提交 ----

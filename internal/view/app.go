@@ -890,6 +890,10 @@ func (a *App) View(c *ui.Context) {
 	//    这样 keepFresh 页面在本帧就是全新的状态（见 pagelife.go）。
 	a.syncPages()
 
+	// 0.5) 待办到期提醒：检查已到期待办，必要时发系统通知；没有更近的截止
+	//      时间时每 30 秒唤醒一次（空闲时也能按时提醒）。
+	a.checkTodoDue(c)
+
 	// 1) 主题源：仅在变化时切换（SetSource 会触发整树重建，不可每帧调用）。
 	if a.themeIdx != a.appliedThemeIdx {
 		a.applyThemeSource()

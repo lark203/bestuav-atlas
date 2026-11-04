@@ -18,7 +18,8 @@
 
 ## 二、功能
 
-- **待办**：快速输入（回车即存）、优先级、**重要 / 紧急**双开关、**截止时间与倒计时**、
+- **待办**：快速输入（回车即存）、优先级、**重要 / 紧急**双开关、
+  **日历 + 时间选择器设置截止时间**、倒计时、**到期系统通知**、
   挂项目/挂仓库、勾选完成、按状态与项目筛选
 - **四象限**：总览页下方按「重要 × 紧急」把未完成待办分四格（马上做 / 排进计划 /
   尽快清掉 / 有空再说），每格直接勾完成
@@ -120,13 +121,13 @@ bestuav-atlas/
 └── scripts/                   # 打包脚本、newpage 页面生成器、make-icon.py（图标生成）
 ```
 
-## 七、数据模型（SQLite schema v5）
+## 七、数据模型（SQLite schema v6）
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | `project` | name / desc / status | 状态：进行中 / 暂停 / 归档 |
 | `repo` | **host** / project_id / name / url / local_path / branch / status / dirty / ahead / behind / last_commit / **importance / learning / difficulty / review** | 一行 = 一个仓库登记；host 决定平台（GitHub/Gitee/Gitea/AtomGit） |
-| `todo` | title / note / project_id / repo_id / priority / **important / urgent** / status / due_at / done_at | 优先级 0 低 1 中 2 高；重要×紧急 决定四象限 |
+| `todo` | title / note / project_id / repo_id / priority / **important / urgent** / status / due_at / done_at / **notified_at** | 优先级 0 低 1 中 2 高；重要×紧急 决定四象限；notified_at 记录到期提醒是否已发 |
 
 时间统一存 UTC RFC3339Nano 字符串，零值存空串；`store` 单连接串行化，避免 SQLITE_BUSY。
 老库（v3 / v4）打开时按 `PRAGMA table_info` 缺列自动 `ALTER TABLE`，不需要手工迁移。
@@ -137,8 +138,9 @@ bestuav-atlas/
 **四象限**：`important × urgent` 两个布尔值。
 重要且紧急（马上做）/ 重要不紧急（排进计划）/ 紧急不重要（尽快清掉）/ 都不（有空再说）。
 
-**倒计时**：`due_at` 支持到分钟（`2026-11-30 18:00`，只填日期则按当天 00:00）。
-列表显示「剩 3天4小时 / 逾期 2小时」，逾期标红。
+**倒计时**：`due_at` 支持到分钟，编辑时用日历 + 时间选择器设置。
+列表显示「剩 3天4小时 / 逾期 2小时」，逾期标红；到点会弹系统通知（多条到期合并为一条），
+点击通知回到待办页。
 
 **仓库状态判定**（`internal/view/atlas_data.go`，优先级从上到下）：
 

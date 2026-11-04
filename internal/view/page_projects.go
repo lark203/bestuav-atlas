@@ -170,8 +170,17 @@ func (a *App) unassignedCard(c *ui.Context, t *ui.Theme, d *atlasCache) {
 		ui.Row(c).Gap(8).Wrap().Children(func() {
 			ui.Text(c, itoa(repos)+" 个仓库 · "+itoa(todos)+" 个未完成的待办").
 				FontSize(t.FontSize - 2).TextColor(t.TextMuted).Grow(1)
-			if ui.Button(c, "去仓库页").Clicked() {
-				a.page = "repos"
+			// 只给「确实有东西可看」的入口：没有未归属仓库时不该出现
+			// 「去仓库页」；两类都有就两个按钮都给。
+			if repos > 0 {
+				if ui.Button(c, "去仓库页").Clicked() {
+					a.page = "repos"
+				}
+			}
+			if todos > 0 {
+				if ui.Button(c, "去待办页").Clicked() {
+					a.page = "todos"
+				}
 			}
 		})
 	})
