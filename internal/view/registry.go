@@ -43,6 +43,11 @@ type navItem struct {
 	// hidden 为 true 时不在侧栏出现，但照样能按 id 分发与显示页头标题。
 	// 用于「只能从别处进入的页面」（如仓库详情），避免为了一个详情页去改导航模型。
 	hidden bool
+	// back 非空时，页头标题左侧自动出现返回键，点击跳到该页面 id。
+	//
+	// 与 bestuav-mygo 保持同一套约定：「从哪来、回哪去」是页面在导航里的位置，
+	// 声明在注册表，骨架（shell.Content 的 Leading 插槽）统一画，页面函数不用管。
+	back string
 	// settings 页面级设置项（可空）：在「设置 → 页面」里渲染成一个区块。
 	//
 	// 设置项自己用 a.PrefsFor(id) 读写页面私有状态（见 prefs.go），设置页不需要
@@ -74,9 +79,10 @@ func navRegistry() []navGroup {
 		// 研发：星图的三块核心业务。顺序即日常使用顺序——先看要做什么（待办），
 		// 再看这些事属于谁（项目），最后处理代码（仓库）。
 		{title: "研发", items: []navItem{
-			// 仓库详情：不出现在侧栏，只能从仓库行点「详情」进入（hidden）。
+			// 仓库详情：不出现在侧栏，只能从仓库行点「详情」进入；back 让页头
+			// 自动出现返回键，回到仓库列表。
 			{id: "repo-detail", label: "仓库详情", icon: icons.Code, build: (*App).repoDetailPage,
-				hidden: true, policy: pagePolicy{keep: keepCached}},
+				hidden: true, back: "repos", policy: pagePolicy{keep: keepCached}},
 			{id: "todos", label: "待办", icon: icons.Checklist, build: (*App).todoPage,
 				policy: pagePolicy{keep: keepCached},
 				tools: []toolAction{

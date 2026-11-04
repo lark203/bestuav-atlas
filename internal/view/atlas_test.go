@@ -224,6 +224,39 @@ func TestRepoDetailHeaderBack(t *testing.T) {
 	}
 }
 
+// TestHiddenPageConventions 隐藏页必须声明 back，且 back 目标必须存在——
+// 否则用户进得去出不来（侧栏没有它，页头也没有返回键）。
+func TestHiddenPageConventions(t *testing.T) {
+	eachPage(func(it navItem) {
+		if it.hidden && it.back == "" {
+			t.Errorf("隐藏页 %q 没有声明 back，进去就出不来了", it.id)
+		}
+		if it.back != "" {
+			if _, ok := pageByID(it.back); !ok {
+				t.Errorf("页面 %q 的 back 指向不存在的页面 %q", it.id, it.back)
+			}
+		}
+	})
+}
+
+// TestHeaderBackNavigates 页头返回键点了之后真的会跳页（与 mygo 同一套实现）。
+func TestHeaderBackNavigates(t *testing.T) {
+	a, _ := newTestApp(t)
+	a.page = "repo-detail"
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		a.headerBack(c, c.Theme(), "repos")
+	}, 320, 80)
+	tt.Frame()
+	if err := tt.Click("返回"); err != nil {
+		t.Fatalf("点击返回键失败: %v", err)
+	}
+	tt.Frame()
+	if a.page != "repos" {
+		t.Errorf("点击返回后应跳到 repos，实际 %q", a.page)
+	}
+}
+
 // TestEmptyPagesRender 空库时首页/仓库页给出引导，而不是白屏。
 func TestEmptyPagesRender(t *testing.T) {
 	a, _ := newTestApp(t)
