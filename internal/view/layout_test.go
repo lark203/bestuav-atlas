@@ -240,6 +240,123 @@ func TestUnassignedCardButtons(t *testing.T) {
 	}
 }
 
+// TestTitleHoverShowsNote 鼠标停在待办标题上时显示备注。
+func TestTitleHoverShowsNote(t *testing.T) {
+	a, st := newTestApp(t)
+	if _, err := st.CreateTodo(store.Todo{
+		Title: "带备注的待办", Note: "这是备注内容", Status: TodoOpen,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+
+	tt := renderPageSized(t, a, "todos", 1440, 900)
+	r, ok := tt.Find("带备注的待办")
+	if !ok {
+		t.Fatal("找不到待办标题")
+	}
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Advance(time.Second)
+	tt.Frame()
+	if !tt.HasText("这是备注内容") {
+		t.Fatalf("悬停标题没有显示备注；文本：%v", tt.Texts())
+	}
+}
+
+// TestRepoNameHoverShowsReview 鼠标停在仓库名上时显示评价。
+func TestRepoNameHoverShowsReview(t *testing.T) {
+	a, st := newTestApp(t)
+	if _, err := st.CreateRepo(store.Repo{
+		Name: "demo/repo", Review: "这是仓库评价", Status: RepoOK,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+
+	tt := renderPageSized(t, a, "repos", 1440, 900)
+	r, ok := tt.Find("demo/repo")
+	if !ok {
+		t.Fatal("找不到仓库名")
+	}
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Advance(time.Second)
+	tt.Frame()
+	if !tt.HasText("这是仓库评价") {
+		t.Fatalf("悬停仓库名没有显示评价；文本：%v", tt.Texts())
+	}
+}
+
+// TestProjectStatusMenu 项目卡上的状态药丸点一下就能改状态。
+func TestProjectStatusMenu(t *testing.T) {
+	a, st := newTestApp(t)
+	pID, err := st.CreateProject(store.Project{Name: "星图", Status: "进行中"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+
+	tt := renderPageSized(t, a, "projects", 1440, 900)
+	if err := tt.Click("项目状态：进行中"); err != nil {
+		t.Fatalf("点项目状态失败: %v；文本：%v", err, tt.Texts())
+	}
+	tt.Frame()
+	if !tt.HasText("归档") {
+		t.Fatalf("状态菜单里没有「归档」；文本：%v", tt.Texts())
+	}
+	if err := tt.Click("暂停"); err != nil {
+		t.Fatalf("点「暂停」失败: %v", err)
+	}
+	tt.Frame()
+
+	p, ok, err := st.ProjectByID(pID)
+	if err != nil || !ok {
+		t.Fatalf("读项目失败: ok=%v err=%v", ok, err)
+	}
+	if p.Status != "暂停" {
+		t.Fatalf("项目状态未写库：%q", p.Status)
+	}
+}
+
+// TestQuadrantDragMovesTodo 从四象限的一格拖到另一格，重要/紧急会跟着改。
+func TestQuadrantDragMovesTodo(t *testing.T) {
+	a, st := newTestApp(t)
+	pID, err := st.CreateProject(store.Project{Name: "星图", Status: "进行中"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.CreateTodo(store.Todo{
+		Title: "拖拽我", ProjectID: pID, Status: TodoOpen,
+		Important: true, Urgent: true, // 先放在「重要且紧急」
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+
+	tt := renderPageSized(t, a, "home", 1440, 1000)
+	src, ok := tt.Find("四象限待办：拖拽我")
+	if !ok {
+		t.Fatalf("找不到拖拽源；文本：%v", tt.Texts())
+	}
+	dst, ok := tt.Find("象限：重要不紧急")
+	if !ok {
+		t.Fatal("找不到目标象限")
+	}
+	tt.Press(src.X+src.W/2, src.Y+src.H/2)
+	tt.Move(dst.X+dst.W/2, dst.Y+dst.H/2)
+	tt.Frame()
+	tt.Release(dst.X+dst.W/2, dst.Y+dst.H/2)
+	tt.Frame()
+
+	got, ok, err := st.TodoByID(id)
+	if err != nil || !ok {
+		t.Fatalf("读待办失败: ok=%v err=%v", ok, err)
+	}
+	if !got.Important || got.Urgent {
+		t.Fatalf("拖到「重要不紧急」后应为 important=true urgent=false，实际 %+v", got)
+	}
+}
+
 // TestSettingsToneWraps 九个色调在窄窗口里必须换行显示，而不是被 Segmented 裁掉。
 func TestSettingsToneWraps(t *testing.T) {
 	a, _ := newTestApp(t)

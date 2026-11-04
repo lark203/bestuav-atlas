@@ -57,7 +57,7 @@ func (a *App) projectCard(c *ui.Context, t *ui.Theme, p store.Project) {
 	kit.Card(c, t, func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, p.Name).FontSize(16).Bold().SingleLine().Grow(1)
-			kit.Pill(c, t, firstNonEmpty(p.Status, "进行中"), projectStatusColor(t, p.Status))
+			a.projectStatusMenu(c, t, p)
 		})
 		if p.Desc != "" {
 			ui.Text(c, p.Desc).TextColor(t.TextMuted).FontSize(t.FontSize - 2)
@@ -93,6 +93,43 @@ func (a *App) projectCard(c *ui.Context, t *ui.Theme, p store.Project) {
 			}
 		})
 	})
+}
+
+// projectStatusMenu 项目卡右上角的状态药丸：点一下直接选「进行中 / 暂停 / 归档」，
+// 不用打开编辑弹窗。外观仍是一枚小药丸，悬停才显出可点击。
+func (a *App) projectStatusMenu(c *ui.Context, t *ui.Theme, p store.Project) {
+	status := firstNonEmpty(p.Status, "进行中")
+	col := projectStatusColor(t, status)
+	btn := ui.ButtonBase(c).Label("项目状态："+status).
+		Padding(2, 8).Radius(999).Cursor(ui.CursorPointer).
+		Tooltip("项目状态：" + status + "；点击切换")
+	alpha := 0.14
+	if btn.Hovered() {
+		alpha = 0.24
+	}
+	btn.Background(kit.Alpha(col, alpha))
+	btn.Children(func() {
+		ui.Text(c, status).FontSize(t.FontSize - 2).TextColor(col).SingleLine()
+		ui.Icon(c, icons.ChevronDown).FontSize(10).TextColor(col).Shrink(0)
+	})
+	btn.PopoverMenuButton(func(m *ui.Menu) {
+		for _, next := range projectStatuses {
+			if m.Item(next).Radio(next == status).Chosen() {
+				a.setProjectStatus(p, next)
+			}
+		}
+	})
+}
+
+// setProjectStatus 快捷改项目状态并刷新页面。
+func (a *App) setProjectStatus(p store.Project, status string) {
+	if firstNonEmpty(p.Status, "进行中") == status {
+		return
+	}
+	p.Status = status
+	if a.saveProject(p) {
+		a.toast("项目状态已改为「" + status + "」")
+	}
 }
 
 // projectStatusColor 项目状态配色：进行中=强调色，暂停=警告，归档=灰。

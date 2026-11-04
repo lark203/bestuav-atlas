@@ -688,6 +688,14 @@ func repoSafeDir(name string) string {
 
 // ---- 小工具 ----
 
+// tooltipIfSet 有内容才挂悬浮提示：空备注/空评价不该弹一个空框。
+func tooltipIfSet(el ui.Element, text string) ui.Element {
+	if strings.TrimSpace(text) != "" {
+		el.Tooltip(text)
+	}
+	return el
+}
+
 // firstNonEmpty 返回第一个非空字符串。
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {

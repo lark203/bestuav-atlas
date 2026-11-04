@@ -205,7 +205,7 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 	}
 	list := &u.repoList
 	list.Key = func(i int) any { return rows[i].ID }
-	list.Label = func(i int) string { return rows[i].Name }
+	list.Label = func(i int) string { return "仓库：" + rows[i].Name }
 
 	ui.Table(c, list, repoCols, len(rows), func(row, col int) {
 		r := rows[row]
@@ -221,7 +221,8 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 			}
 		case 1:
 			ui.Column(c).Gap(1).Children(func() {
-				ui.Text(c, r.Name).SingleLine().Bold()
+				// 悬停仓库名看评价（详情页里有完整评价卡；这里只做快速预览）。
+				tooltipIfSet(ui.Text(c, r.Name).SingleLine().Bold(), r.Review)
 				sub := firstNonEmpty(r.LocalPath, r.URL)
 				if sub != "" {
 					ui.Text(c, sub).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()

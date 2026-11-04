@@ -139,7 +139,7 @@ func (a *App) todoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 			a.setTodoStatus(td.ID, next)
 		}
 
-		title := ui.Text(c, td.Title).Grow(1).SingleLine()
+		title := tooltipIfSet(ui.Text(c, td.Title).Grow(1).SingleLine(), td.Note)
 		if done {
 			title.Strikethrough().TextColor(t.TextMuted)
 		}

@@ -750,6 +750,16 @@ func (a *App) repoByID(id int64) (store.Repo, bool) {
 	return store.Repo{}, false
 }
 
+// todoByID 从快照里取一条待办。
+func (a *App) todoByID(id int64) (store.Todo, bool) {
+	for _, td := range a.atlas().todos {
+		if td.ID == id {
+			return td, true
+		}
+	}
+	return store.Todo{}, false
+}
+
 // ---- 项目编辑 ----
 
 func (a *App) projectDialog(c *ui.Context, t *ui.Theme) {

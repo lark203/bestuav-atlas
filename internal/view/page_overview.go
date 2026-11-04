@@ -113,7 +113,7 @@ func (a *App) quadrantsCard(c *ui.Context, t *ui.Theme) {
 
 	kit.Card(c, t, func() {
 		kit.CardHeader(c, t, "四象限",
-			"重要 × 紧急。先做左上；右上（重要不紧急）是长期价值，别让它一直拖成左上。", nil)
+			"重要 × 紧急。先做左上；右上（重要不紧急）是长期价值，别让它一直拖成左上。拖动待办可换象限。", nil)
 		kit.RowGrid(c, a.columnsFor(c, 300, 2), func() {
 			for i := range quadrantDefs {
 				a.quadrantCell(c, t, i, groups[i])
@@ -122,48 +122,69 @@ func (a *App) quadrantsCard(c *ui.Context, t *ui.Theme) {
 	})
 }
 
+// quadrantDrag 是四象限拖拽的值：只带待办 id，落在哪一格由目标格决定。
+type quadrantDrag struct{ id int64 }
+
 // quadrantCell 一个象限格子：标题 + 数量 + 至多四条待办。
+//
+// 整格是拖放目标：从别的格子把待办拖进来，按落点格子的「重要 × 紧急」
+// 重新写 important / urgent。格子上高亮只在拖动经过时出现，不改变平时外观。
 func (a *App) quadrantCell(c *ui.Context, t *ui.Theme, i int, todos []store.Todo) {
 	def := quadrantDefs[i]
 	col := []ui.Color{t.Danger, t.Accent, t.Warning, t.TextMuted}[i]
 
-	ui.Column(c).Gap(6).Padding(12).Radius(8).
-		Background(kit.Alpha(col, 0.07)).Border(1, kit.Alpha(col, 0.22)).
-		Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, def.Title).Bold().TextColor(col).SingleLine()
-				ui.Text(c, itoa(len(todos))).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-				ui.Text(c, "").Grow(1)
-				ui.Text(c, def.Hint).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
-			})
-			if len(todos) == 0 {
-				kit.EmptyHint(c, t, "这一格是空的")
-				return
-			}
-			// 每格最多四条：象限是「一眼看清轻重」，不是第二张待办列表。
-			limit := len(todos)
-			if limit > 4 {
-				limit = 4
-			}
-			for _, td := range todos[:limit] {
-				a.quadrantTodoRow(c, t, td)
-			}
-			if len(todos) > 4 {
-				ui.Text(c, "还有 "+itoa(len(todos)-4)+" 条，去待办页看").
-					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-			}
+	zone := ui.Column(c).Gap(6).Padding(12).Radius(8).Label("象限：" + def.Title)
+	_, over := ui.DragOver[quadrantDrag](zone)
+	bg, edge := 0.07, 0.22
+	if over {
+		bg, edge = 0.16, 0.60
+	}
+	zone.Background(kit.Alpha(col, bg)).Border(1, kit.Alpha(col, edge))
+	zone.Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, def.Title).Bold().TextColor(col).SingleLine()
+			ui.Text(c, itoa(len(todos))).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+			ui.Text(c, "").Grow(1)
+			ui.Text(c, def.Hint).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 		})
+		if len(todos) == 0 {
+			kit.EmptyHint(c, t, "这一格是空的")
+			return
+		}
+		// 每格最多四条：象限是「一眼看清轻重」，不是第二张待办列表。
+		limit := len(todos)
+		if limit > 4 {
+			limit = 4
+		}
+		for _, td := range todos[:limit] {
+			a.quadrantTodoRow(c, t, td)
+		}
+		if len(todos) > 4 {
+			ui.Text(c, "还有 "+itoa(len(todos)-4)+" 条，去待办页看").
+				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+		}
+	})
+	if d, ok := ui.Drop[quadrantDrag](zone); ok {
+		a.moveTodoToQuadrant(d.id, i)
+	}
 }
 
 // quadrantTodoRow 四象限里的一行待办：勾选 + 标题 + 倒计时。
 func (a *App) quadrantTodoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 	done := td.Status == TodoDone
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(3, 2).Children(func() {
+	row := ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(3, 2).
+		Label("四象限待办：" + td.Title).
+		Tooltip("拖动到其它象限可改变「重要 / 紧急」").
+		Cursor(ui.CursorGrab).Drag(quadrantDrag{id: td.ID})
+	if row.Dragging() {
+		row.Opacity(0.4)
+	}
+	row.Children(func() {
 		check := ui.Checkbox(c, &done, "")
 		if check.Changed() && done {
 			a.setTodoStatus(td.ID, TodoDone)
 		}
-		ui.Text(c, td.Title).Grow(1).SingleLine().FontSize(t.FontSize - 2)
+		tooltipIfSet(ui.Text(c, td.Title).Grow(1).SingleLine().FontSize(t.FontSize-2), td.Note)
 		if label, overdue := countdownText(td.DueAt); label != "" {
 			col := t.TextMuted
 			if overdue {
@@ -172,6 +193,26 @@ func (a *App) quadrantTodoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 			ui.Text(c, label).FontSize(t.FontSize - 2).TextColor(col).SingleLine()
 		}
 	})
+}
+
+// moveTodoToQuadrant 把待办移到第 i 个象限（0 基），并写回重要/紧急。
+func (a *App) moveTodoToQuadrant(id int64, i int) {
+	if i < 0 || i >= len(quadrantDefs) {
+		return
+	}
+	td, ok := a.todoByID(id)
+	if !ok {
+		return
+	}
+	important := i == 0 || i == 1
+	urgent := i == 0 || i == 2
+	if td.Important == important && td.Urgent == urgent {
+		return
+	}
+	td.Important, td.Urgent = important, urgent
+	if a.saveTodo(td) {
+		a.toast("已移到「" + quadrantDefs[i].Title + "」")
+	}
 }
 
 // overviewSubtitle 一句「今天什么情况」。
@@ -222,7 +263,7 @@ func (a *App) overviewTodoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 		if check.Changed() && done {
 			a.setTodoStatus(td.ID, TodoDone)
 		}
-		ui.Text(c, td.Title).Grow(1).SingleLine()
+		tooltipIfSet(ui.Text(c, td.Title).Grow(1).SingleLine(), td.Note)
 		if name := a.atlas().projectName(td.ProjectID); name != "" {
 			kit.Pill(c, t, name, t.Accent)
 		}
@@ -255,7 +296,7 @@ func (a *App) overviewRepos(c *ui.Context, t *ui.Theme) {
 		ui.Column(c).Gap(2).Children(func() {
 			for _, r := range problem {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(6, 6).Radius(8).Children(func() {
-					ui.Text(c, r.Name).Grow(1).SingleLine().FontSize(t.FontSize - 2)
+					tooltipIfSet(ui.Text(c, r.Name).Grow(1).SingleLine().FontSize(t.FontSize-2), r.Review)
 					kit.Pill(c, t, r.Status, repoStatusColor(t, r.Status))
 					if r.Status == RepoBehind {
 						if smallButton(c, "拉取").Clicked() {
