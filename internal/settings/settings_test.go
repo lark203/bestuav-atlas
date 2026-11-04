@@ -40,6 +40,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	s.AsyncConcurrency = 6
 	s.RepoAutoRefresh = true
 	s.RepoAutoRefreshMinutes = 60
+	s.RepoToken = "sync-token"
+	s.GitHubToken = "workspace-token"
 	if err := s.Save(); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
@@ -54,7 +56,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		got.BackgroundImage != s.BackgroundImage ||
 		got.MenuOpacity != 0.5 || got.ContentOpacity != 0.7 ||
 		got.AsyncConcurrency != 6 || !got.RepoAutoRefresh ||
-		got.RepoAutoRefreshMinutes != 60 {
+		got.RepoAutoRefreshMinutes != 60 ||
+		got.RepoToken != "sync-token" || got.GitHubToken != "workspace-token" {
 		t.Fatalf("读取结果与写入不一致: %+v", got)
 	}
 }
@@ -102,7 +105,8 @@ func TestNormalizeBadValues(t *testing.T) {
 		"petX":                   -9,
 		"petY":                   -9,
 		"repoKind":               "svn",
-		"repoToken":              "  tok  ",
+		"repoToken":              "  sync-tok  ",
+		"githubToken":            "  workspace-tok  ",
 		"repoBranch":             "",
 		"repoPath":               "/profiles/x.zip/",
 	})
@@ -127,8 +131,8 @@ func TestNormalizeBadValues(t *testing.T) {
 		s.PetXP != 0 || s.PetX != -1 || s.PetY != -1 {
 		t.Errorf("桌宠字段未纠正: %+v", s)
 	}
-	if s.RepoKind != "github" || s.RepoBranch != "main" || s.RepoToken != "tok" ||
-		s.RepoPath != "profiles/x.zip" {
+	if s.RepoKind != "github" || s.RepoBranch != "main" || s.RepoToken != "sync-tok" ||
+		s.GitHubToken != "workspace-tok" || s.RepoPath != "profiles/x.zip" {
 		t.Errorf("仓库字段未纠正: %+v", s)
 	}
 	if s.MenuOpacity != DefaultMenuOpacity || s.ContentOpacity != DefaultContentOpacity {
@@ -139,6 +143,46 @@ func TestNormalizeBadValues(t *testing.T) {
 	}
 	if s.RepoAutoRefreshMinutes != DefaultRepoAutoRefreshMinutes {
 		t.Errorf("自动刷新间隔未回落到默认: %d", s.RepoAutoRefreshMinutes)
+	}
+}
+
+// TestLegacyGitHubTokenMigration 拆分前只有一个 repoToken：老文件首次读取时
+// 要同时填到工作区 GitHubToken；新版写出空 githubToken 后不能再被填回来。
+func TestLegacyGitHubTokenMigration(t *testing.T) {
+	isolate(t)
+	p, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(`{"theme":"dark","repoToken":"legacy-token"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.RepoToken != "legacy-token" || s.GitHubToken != "legacy-token" {
+		t.Fatalf("老文件应把 repoToken 迁移到 GitHubToken：%+v", s)
+	}
+
+	// 新版保存后主动清空工作区令牌，重启不能又被旧 repoToken 填回来。
+	s.GitHubToken = ""
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.GitHubToken != "" {
+		t.Fatalf("清空 githubToken 后不应被迁移逻辑填回：%q", again.GitHubToken)
+	}
+	if again.RepoToken != "legacy-token" {
+		t.Fatalf("RepoToken 不应丢失：%q", again.RepoToken)
 	}
 }
 

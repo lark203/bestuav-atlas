@@ -94,7 +94,7 @@ type tokenSet struct {
 
 func (a *App) tokensSnapshot() tokenSet {
 	return tokenSet{
-		github:      strings.TrimSpace(a.settings.RepoToken),
+		github:      strings.TrimSpace(a.settings.GitHubToken),
 		gitee:       strings.TrimSpace(a.settings.GiteeToken),
 		atomgit:     strings.TrimSpace(a.settings.AtomGitToken),
 		gitea:       strings.TrimSpace(a.settings.GiteaToken),

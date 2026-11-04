@@ -62,9 +62,10 @@ var machineKeys = []string{
 	"allowMultiInstance", // 单/多开是启动参数，按机器决定
 	"ignoredVersion",     // 「忽略这个版本」是本地决定
 	"backgroundImage",    // 绝对路径跨平台无效，导入时按包内图片重写
-	// 仓库同步的凭据与配置只属于本机（令牌绝不进配置包）。
+	// 仓库同步 / 各平台令牌都只属于本机（令牌绝不进配置包）。
 	"repoKind", "repoBaseURL", "repoToken", "repoOwner", "repoRepo",
 	"repoBranch", "repoPath", "repoLast",
+	"githubToken", "giteeToken", "atomGitToken", "giteaHost", "giteaToken",
 }
 
 // preservedKeys 导入时保留「本机当前值」的设备相关字段：包里的这些键已被剔除，
@@ -74,6 +75,7 @@ var preservedKeys = []string{
 	"openAtLogin", "allowMultiInstance", "ignoredVersion",
 	"repoKind", "repoBaseURL", "repoToken", "repoOwner", "repoRepo",
 	"repoBranch", "repoPath", "repoLast",
+	"githubToken", "giteeToken", "atomGitToken", "giteaHost", "giteaToken",
 }
 
 // ExportOptions 导出参数。

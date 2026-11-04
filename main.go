@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
+	_ "github.com/egoist/mygo/locales/zh-Hans" // 注册 MyGo 控件的中文文案（日期/时间选择器、菜单等）
 	"github.com/egoist/mygo/ui"
 
 	"bestuav-atlas/internal/appmeta"
@@ -190,6 +191,10 @@ func main() {
 	announceStartup(db != nil)
 
 	mygo.App.WhenReady(func() {
+		// 星图的界面文案全是中文，MyGo 自带控件（尤其日期/时间选择器与日历）
+		// 也固定跟随简体中文，避免英文系统区域下出现「11/5/2026 / 11:43 PM」。
+		mygo.App.SetLocale("zh-Hans")
+
 		// 主循环已就绪，应用已保存的主题（跟随系统 / 浅色 / 深色）。
 		a.ApplyTheme()
 		win := mygo.NewWindow(mygo.WindowOptions{

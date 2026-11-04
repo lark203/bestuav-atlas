@@ -167,7 +167,7 @@ bestuav-atlas/
 
 | 平台 | 识别方式 | API | 令牌 |
 |---|---|---|---|
-| GitHub | `github.com` | `api.github.com` | 「GitHub 令牌」（与配置包同步共用同一个 PAT） |
+| GitHub | `github.com` | `api.github.com` | 「设置 → 工作区」的 GitHub 令牌（与「关于与诊断」的配置包同步令牌分开） |
 | Gitee | `gitee.com` | `gitee.com/api/v5` | 「Gitee 令牌」 |
 | Gitea | 自建域名（其它主机） | `<实例地址>/api/v1`（**协议跟随实例地址**，http/https 均可） | 「Gitea 实例」+「Gitea 令牌」 |
 | AtomGit | `atomgit.com` | `api.atomgit.com/api/v5` | 「AtomGit 令牌」 |

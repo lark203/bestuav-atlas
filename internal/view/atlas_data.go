@@ -580,12 +580,13 @@ func (a *App) giteaScheme() string {
 
 // tokenFor 按平台主机取令牌。
 //
-// GitHub 复用「数据与诊断 → 仓库同步」那个 PAT（同一个令牌能做的事一样，
-// 存两份只会让用户改一处忘一处）；其它平台各存各的，互不通用。
+// GitHub 用工作区的 GitHubToken（只服务星图的仓库列表/远端信息/README），
+// 与「关于与诊断 → 仓库同步」的 RepoToken 是两套凭据，互不覆盖；
+// 其它平台各存各的，互不通用。
 func (a *App) tokenFor(host string) string {
 	switch host {
 	case "github.com":
-		return strings.TrimSpace(a.settings.RepoToken)
+		return strings.TrimSpace(a.settings.GitHubToken)
 	case "gitee.com":
 		return strings.TrimSpace(a.settings.GiteeToken)
 	case "atomgit.com":

@@ -51,6 +51,8 @@ func newFixture(t *testing.T) fixture {
 		"repoKind":           "gitea",
 		"repoToken":          "package-secret",
 		"repoOwner":          "old-owner",
+		"githubToken":        "package-workspace-secret",
+		"giteeToken":         "package-gitee-secret",
 	}, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +128,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 		dbPath:       filepath.Join(t.TempDir(), "data.db"),
 		dataDir:      t.TempDir(),
 	}
-	writeFile(t, dst.settingsPath, `{"theme":"light","openAtLogin":false,"allowMultiInstance":false,"ignoredVersion":"","fontSize":12,"repoToken":"dst-secret","repoOwner":"me"}`)
+	writeFile(t, dst.settingsPath, `{"theme":"light","openAtLogin":false,"allowMultiInstance":false,"ignoredVersion":"","fontSize":12,"repoToken":"dst-secret","repoOwner":"me","githubToken":"dst-workspace","giteeToken":"dst-gitee"}`)
 	s, err := store.Open(dst.dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +180,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 	// 仓库令牌只属于本机：包里的 token 不能带过来，本机的要保留。
 	if got["repoToken"] != "dst-secret" {
 		t.Errorf("仓库令牌应保留本机值，实际 %v", got["repoToken"])
+	}
+	if got["githubToken"] != "dst-workspace" || got["giteeToken"] != "dst-gitee" {
+		t.Errorf("工作区令牌应保留本机值，实际 github=%v gitee=%v",
+			got["githubToken"], got["giteeToken"])
 	}
 	if got["repoOwner"] == "old-owner" {
 		t.Error("包里的仓库配置不应覆盖本机")

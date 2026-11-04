@@ -259,10 +259,13 @@ func (a *App) repoSection(c *ui.Context, t *ui.Theme) {
 		ui.TextInput(c, &a.settings.RepoPath).
 			Placeholder(repoDefaultPath()).Grow(1)
 	})
-	repoField(c, t, "访问令牌", func() {
+	repoField(c, t, "同步令牌", func() {
 		ui.TextInput(c, &a.settings.RepoToken).Password().
-			Placeholder("PAT：只授权该仓库的 contents 读写").Grow(1)
+			Placeholder("PAT：只授权该配置仓库的 contents 读写").Grow(1)
 	})
+	ui.Text(c, "只用于上传 / 下载配置包，不参与星图仓库页的 GitHub 列表与远端信息；"+
+		"星图的 GitHub 令牌在「设置 → 工作区」单独填写。").
+		TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 
 	ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 		if ui.Button(c, "测试连接").Clicked() && !a.repoBusy {

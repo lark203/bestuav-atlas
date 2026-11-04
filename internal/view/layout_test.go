@@ -289,6 +289,23 @@ func TestRepoNameHoverShowsReview(t *testing.T) {
 	}
 }
 
+// TestGitHubTokensAreSeparate 工作区 GitHub 令牌与配置包同步令牌互不覆盖。
+func TestGitHubTokensAreSeparate(t *testing.T) {
+	a, _ := newTestApp(t)
+	a.settings.RepoToken = "sync-token"
+	a.settings.GitHubToken = "workspace-token"
+
+	if got := a.tokenFor("github.com"); got != "workspace-token" {
+		t.Fatalf("星图仓库页应使用工作区 GitHubToken，实际 %q", got)
+	}
+	if got := a.tokensSnapshot().github; got != "workspace-token" {
+		t.Fatalf("批量快照应使用工作区 GitHubToken，实际 %q", got)
+	}
+	if got := a.repoConfig().Token; got != "sync-token" {
+		t.Fatalf("配置包同步应使用 RepoToken，实际 %q", got)
+	}
+}
+
 // TestRepoAutoRefreshControls 仓库页的自动刷新开关与频率选择能写回设置。
 func TestRepoAutoRefreshControls(t *testing.T) {
 	a, _ := newTestApp(t)

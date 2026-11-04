@@ -70,7 +70,7 @@ type Settings struct {
 	// 都属于本机设置：令牌是敏感信息，导出配置包时会被剔除、导入时保留本机值。
 	RepoKind    string `json:"repoKind"`    // github / gitea / gitee
 	RepoBaseURL string `json:"repoBaseURL"` // Gitea 实例地址；其他平台留空用默认 API
-	RepoToken   string `json:"repoToken"`   // 个人访问令牌（明文，仅存本机）
+	RepoToken   string `json:"repoToken"`   // 配置包同步用的 PAT（明文，仅存本机）
 	RepoOwner   string `json:"repoOwner"`
 	RepoRepo    string `json:"repoRepo"`
 	RepoBranch  string `json:"repoBranch"` // 默认 main
@@ -80,9 +80,13 @@ type Settings struct {
 	// ---- 星图：仓库管理用的本机设置 ----
 	// WorkRoot 仓库本地根目录：导入仓库时默认把代码放在 <WorkRoot>/<仓库名>。
 	// 空串 = <用户主目录>/atlas-repos（见 internal/view/atlas_data.go 的 workRoot）。
-	// GitHub 令牌复用上面的 RepoToken：同一个 PAT 既要读写配置包、也要读仓库列表，
-	// 存两份只会让用户改一处、忘一处。
 	WorkRoot string `json:"workRoot"`
+
+	// GitHubToken 工作区里的 GitHub PAT：只用于星图的「读取我的仓库 / 刷新远端信息 /
+	// 读 README」，与上面 RepoToken（配置包同步）是两套凭据，互不覆盖。
+	// 两者可以填同一个 PAT，也可以各用各的权限范围；字段分开是为了避免改一处连带
+	// 改掉另一处。
+	GitHubToken string `json:"githubToken"`
 
 	// RepoAutoRefresh 仓库页是否按固定间隔自动刷新「本地状态 + 远端信息」。
 	// 自动刷新和手动批量共用异步工作池与最大并发设置；失败仓库跳过、下一轮再试。
@@ -282,6 +286,7 @@ func Load() (*Settings, error) {
 				if old, oerr := os.ReadFile(legacy); oerr == nil {
 					s := Default()
 					if json.Unmarshal(old, s) == nil {
+						migrateLegacyGitHubToken(old, s)
 						normalize(s)
 						_ = s.Save() // 迁移失败不影响本次使用
 						return s, nil
@@ -296,8 +301,28 @@ func Load() (*Settings, error) {
 	if err := json.Unmarshal(data, s); err != nil {
 		return Default(), fmt.Errorf("解析设置失败，使用默认: %w", err)
 	}
+	migrateLegacyGitHubToken(data, s)
 	normalize(s)
 	return s, nil
+}
+
+// migrateLegacyGitHubToken 兼容拆分前的设置文件：老版本只有一个 repoToken，
+// 工作区和配置包同步共用它。第一次读到没有 githubToken 键的老文件时，把它同时
+// 填到 GitHubToken，避免升级后工作区的 GitHub 功能突然失效。
+//
+// 只看「JSON 里有没有这个键」而不是「值是否为空」：新版 Save 会写出空字符串，
+// 用户以后主动清空工作区令牌时，重启不能被旧 repoToken 又填回来。
+func migrateLegacyGitHubToken(data []byte, s *Settings) {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return
+	}
+	if _, ok := raw["githubToken"]; ok {
+		return
+	}
+	if s.GitHubToken == "" {
+		s.GitHubToken = s.RepoToken
+	}
 }
 
 // MustLoad 同 Load，但忽略错误返回默认兜底，便于调用方一行初始化。
@@ -375,6 +400,8 @@ func normalize(s *Settings) {
 	}
 	s.RepoBaseURL = strings.TrimSpace(s.RepoBaseURL)
 	s.RepoToken = strings.TrimSpace(s.RepoToken)
+	// 工作区 GitHub 令牌是另一套凭据（只给星图读仓库/远端/README 用）。
+	s.GitHubToken = strings.TrimSpace(s.GitHubToken)
 	s.RepoOwner = strings.TrimSpace(s.RepoOwner)
 	s.RepoRepo = strings.TrimSpace(s.RepoRepo)
 	s.RepoBranch = strings.TrimSpace(s.RepoBranch)

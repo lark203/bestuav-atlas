@@ -12,7 +12,8 @@ import (
 // 这类纯偏好无关，属于业务配置，改它的机会和看它的机会都更多。
 //
 // 令牌必须每个平台一份：Gitee 的私人令牌访问不了 GitHub，AtomGit 更是独立账号体系。
-// GitHub 复用「数据与诊断 → 仓库同步」那个 PAT（同一个令牌能做的事一样）。
+// GitHub 也单独一份：这里只服务星图的仓库页，与「关于与诊断 → 仓库同步」的
+// PAT 分开存，避免改一处把另一处覆盖。
 //
 // 这些输入框都要显式 a.persist()：设置页没有「保存」按钮，全局的写盘检测只覆盖
 // 主题/字号那类 App 字段；直接绑到 settings 上的文本框如果不在 Changed 时落盘，
@@ -35,8 +36,11 @@ func (a *App) workspaceSection(c *ui.Context, t *ui.Theme) {
 	ui.Text(c, "导入仓库时默认放到「根目录/仓库名」（不拼用户名）；留空则用上面的灰字路径。").
 		TextColor(t.TextMuted).FontSize(t.FontSize-2).Margin(0, 0, 0, 4)
 
-	a.tokenRow(c, t, "GitHub 令牌", &a.settings.RepoToken, forgePlatforms[0],
-		"PAT：read 仓库信息；与「仓库同步」共用")
+	a.tokenRow(c, t, "GitHub 令牌", &a.settings.GitHubToken, forgePlatforms[0],
+		"PAT：read 仓库信息；只用于星图仓库（与配置包同步的令牌分开）")
+	ui.Text(c, "这里的 GitHub 令牌只服务仓库页的列表 / 远端信息 / README；"+
+		"配置包同步用的令牌在「关于与诊断 → 仓库同步」里单独填写。").
+		TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 	a.tokenRow(c, t, "Gitee 令牌", &a.settings.GiteeToken, forgePlatforms[1],
 		"私人令牌：projects / pull_requests 只读即可")
 	a.tokenRow(c, t, "AtomGit 令牌", &a.settings.AtomGitToken, forgePlatforms[3],
