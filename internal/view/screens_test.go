@@ -93,6 +93,17 @@ func TestScreenshots(t *testing.T) {
 		save("atlas-repo-detail")
 	}
 
+	// 仓库页：选中两个仓库时的批量条（含批量删除）。
+	if repos2, err := st.ListRepos(); err == nil && len(repos2) > 0 {
+		a.atlasUI.sel = map[int64]bool{repos2[0].ID: true}
+		if len(repos2) > 1 {
+			a.atlasUI.sel[repos2[1].ID] = true
+		}
+		a.page = "repos"
+		save("atlas-repos-bulk")
+		a.clearRepoSelection()
+	}
+
 	// 两个弹窗：导入与批量提交。
 	a.page = "repos"
 	a.openImportDialog()
@@ -100,6 +111,11 @@ func TestScreenshots(t *testing.T) {
 	a.closeAtlasDialog()
 	a.openCommitDialog([]int64{1, 2})
 	save("atlas-dialog-commit")
+
+	// 删除确认（单个与批量共用）。
+	a.closeAtlasDialog()
+	a.confirmErase([]int64{1, 2})
+	save("atlas-dialog-erase")
 
 	// 重量级任务：本地导入时的全窗口遮罩 + 进度。
 	a.closeAtlasDialog()

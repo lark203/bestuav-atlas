@@ -1034,6 +1034,7 @@ func (a *App) shell(c *ui.Context, t *ui.Theme) {
 	shell.Content(c, t, shell.ContentOptions{
 		Title:      pageTitle(a.page),
 		Subtitle:   subtitle,
+		Leading:    a.pageLeading(c, t),
 		Tools:      func() { a.headerTools(c, t) },
 		Body:       func() { a.pageBody(c, t) },
 		Scroll:     a.ScrollFor(a.page),

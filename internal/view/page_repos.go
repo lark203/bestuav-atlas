@@ -130,6 +130,7 @@ func (a *App) repoBulkBar(c *ui.Context, t *ui.Theme) {
 		{Label: "批量提交并推送", Icon: "upload"},
 		{Label: "刷新状态", Icon: "refresh-cw"},
 		{Label: "刷新远端信息", Icon: "git-commit"},
+		{Label: "批量删除", Icon: "trash-2"},
 	}, &chosen, data.BulkBarOptions{Selected: "已选 %d 个仓库", Clear: "清除选择"})
 
 	if clear.Clicked() {
@@ -144,6 +145,8 @@ func (a *App) repoBulkBar(c *ui.Context, t *ui.Theme) {
 		a.runRepoBatch(batchInspect, selected, "")
 	case 3:
 		a.runRepoBatch(batchRemote, selected, "")
+	case 4:
+		a.confirmErase(selected)
 	}
 }
 
@@ -215,8 +218,9 @@ func (a *App) repoTable(c *ui.Context, t *ui.Theme, rows []store.Repo) {
 					if smallButton(c, "提交").Clicked() {
 						a.openCommitDialog([]int64{r.ID})
 					}
-					if smallButton(c, "编辑").Clicked() {
-						a.openRepoDialog(r)
+					// 编辑移到详情页（「编辑登记」），这一列留给高频动作 + 删除。
+					if smallButton(c, "删除").Clicked() {
+						a.confirmErase([]int64{r.ID})
 					}
 				})
 			}

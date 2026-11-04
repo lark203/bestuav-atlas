@@ -11,6 +11,7 @@ import (
 type ContentOptions struct {
 	Title    string // 页头标题（来自菜单注册表）
 	Subtitle string // 标题右侧的附加文字（如正在执行的任务名），可为空
+	Leading  func() // 标题左侧的附加控件（如「返回」图标）；nil 表示没有
 	Tools    func() // 页头右侧工具条；nil 表示没有
 	Body     func() // 页面内容
 
@@ -54,9 +55,15 @@ func Content(c *ui.Context, t *ui.Theme, o ContentOptions) {
 }
 
 // contentHeader 页头：左标题（固定，不参与滚动），右侧工具条。
+//
+// Leading 放在标题**左侧**（不是右侧工具条里）：返回键是「离开这一页」的动作，
+// 紧贴标题更符合「标题栏就是这一页」的心智模型，也不会和页内操作混在一起。
 func contentHeader(c *ui.Context, t *ui.Theme, o ContentOptions) {
 	ui.Row(c).Height(HeaderHeight).Shrink(0).AlignItems(ui.Center).
 		Padding(0, kit.PagePadX).Gap(t.Space(2)).Children(func() {
+		if o.Leading != nil {
+			o.Leading()
+		}
 		ui.Text(c, o.Title).FontSize(16).Bold().Shrink(0).SingleLine()
 
 		// 正在执行轻量任务时，标题右侧显示任务名（与进度条呼应）。

@@ -56,6 +56,8 @@ type atlasUI struct {
 	// 批量提交弹窗
 	commitMsg string
 	commitIDs []int64
+	// 删除确认弹窗要删的仓库 id（单个/批量共用一条路径）。
+	eraseIDs []int64
 
 	// ---- 仓库详情页 ----
 	detailID     int64
@@ -248,7 +250,91 @@ func (a *App) atlasDialogs(c *ui.Context, t *ui.Theme) {
 		a.todoDialog(c, t)
 	case "commit":
 		a.commitDialog(c, t)
+	case "erase":
+		a.eraseDialog(c, t)
 	}
+}
+
+// confirmErase 打开「删除仓库登记」确认框（单个与批量共用）。
+//
+// 只删本机登记：仓库对应的本地目录、远端仓库都不动——把「删登记」和「删代码」
+// 混在一个按钮里，迟早会有人点错。
+func (a *App) confirmErase(ids []int64) {
+	ids = uniqueIDs(ids)
+	if len(ids) == 0 {
+		a.toast("先选中要删除的仓库")
+		return
+	}
+	a.atlasUI.eraseIDs = ids
+	a.atlasUI.dialog = "erase"
+	a.atlasUI.dialogPage = a.page
+}
+
+// eraseDialog 删除确认。
+//
+// 用本项目统一的 atlasModal 外壳（标题 + 关闭键 + 遮罩），而不是 CrychicUI 的
+// ConfirmDialog：后者没有标题栏样式，和导入/编辑这些弹窗放在一起会显得不像一家人。
+func (a *App) eraseDialog(c *ui.Context, t *ui.Theme) {
+	ids := append([]int64(nil), a.atlasUI.eraseIDs...)
+	a.atlasModal(c, t, "删除仓库登记", func() {
+		dialogDesc(c, t, "确定删除这 "+itoa(len(ids))+" 个仓库的登记吗？")
+		ui.Text(c, "只删本机登记：磁盘上的代码目录、GitHub/Gitee 等远端仓库都不会动，之后可以重新导入。").
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+		dialogButtons(c, func() {
+			if ui.Button(c, "取消").Clicked() {
+				a.closeAtlasDialog()
+			}
+			if ui.PrimaryButton(c, "删除").Clicked() {
+				a.closeAtlasDialog()
+				a.eraseRepos(ids)
+			}
+		})
+	})
+}
+
+// eraseRepos 批量删除仓库登记；返回成功删除的条数。
+func (a *App) eraseRepos(ids []int64) {
+	if a.store == nil {
+		a.toast("本次运行不落库，无法删除")
+		return
+	}
+	deleted, failed := 0, 0
+	for _, id := range ids {
+		if err := a.store.DeleteRepo(id); err != nil {
+			failed++
+			logging.Errv("atlas", "删除仓库登记失败", err, "id", id)
+			continue
+		}
+		deleted++
+		delete(a.atlasUI.sel, id)
+	}
+	a.reloadAtlas()
+	switch {
+	case failed > 0:
+		a.toast("删除 " + itoa(deleted) + " 个，失败 " + itoa(failed) + " 个（详见日志）")
+	case deleted == 1:
+		a.toast("已删除 1 个仓库登记（本地代码未动）")
+	default:
+		a.toast("已删除 " + itoa(deleted) + " 个仓库登记（本地代码未动）")
+	}
+	// 详情页删掉的正是不在列表里了：回列表，避免停在「这个仓库已经不在列表里」。
+	if a.page == "repo-detail" && len(ids) == 1 && a.atlasUI.detailID == ids[0] {
+		a.page = "repos"
+	}
+}
+
+// uniqueIDs 去重并丢掉非法 id（<=0）。
+func uniqueIDs(ids []int64) []int64 {
+	out := make([]int64, 0, len(ids))
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // ---- 通用版式 ----

@@ -168,6 +168,62 @@ func TestGiteaSchemeFollowsConfig(t *testing.T) {
 	}
 }
 
+// TestEraseRepos 删除仓库登记：只动本地登记，选中态一起清掉。
+func TestEraseRepos(t *testing.T) {
+	a, st := newTestApp(t)
+	_, repoID := seedAtlas(t, a, st)
+	second, err := st.CreateRepo(store.Repo{Name: "lark203/other", Status: RepoOK})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+	a.atlasUI.sel = map[int64]bool{repoID: true, second: true}
+
+	a.eraseRepos([]int64{repoID, second})
+
+	repos, err := a.store.ListRepos()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 0 {
+		t.Errorf("登记应被删空，实际还剩 %d 个", len(repos))
+	}
+	if len(a.atlasUI.sel) != 0 {
+		t.Errorf("删除后选中态应清空，实际 %v", a.atlasUI.sel)
+	}
+}
+
+// TestEraseDialogRenders 删除确认框能画出来，并带上数量。
+func TestEraseDialogRenders(t *testing.T) {
+	a, st := newTestApp(t)
+	_, repoID := seedAtlas(t, a, st)
+	a.page = "repos"
+	a.confirmErase([]int64{repoID})
+
+	tt := renderPage(t, a, "repos")
+	for _, want := range []string{"删除仓库登记", "1 个仓库"} {
+		if !tt.HasText(want) {
+			t.Errorf("删除确认缺少 %q；实际文本：%v", want, tt.Texts())
+		}
+	}
+}
+
+// TestRepoDetailHeaderBack 详情页的返回键在页头（标题左侧），页内不再有「← 返回」。
+func TestRepoDetailHeaderBack(t *testing.T) {
+	a, st := newTestApp(t)
+	_, repoID := seedAtlas(t, a, st)
+	if r, ok := a.repoByID(repoID); ok {
+		a.openRepoDetail(r)
+	}
+	tt := renderPage(t, a, "repo-detail")
+	if tt.HasText("← 返回") {
+		t.Errorf("页内不应再有返回按钮；实际文本：%v", tt.Texts())
+	}
+	if !tt.HasText("仓库详情") {
+		t.Errorf("页头标题缺失；实际文本：%v", tt.Texts())
+	}
+}
+
 // TestEmptyPagesRender 空库时首页/仓库页给出引导，而不是白屏。
 func TestEmptyPagesRender(t *testing.T) {
 	a, _ := newTestApp(t)

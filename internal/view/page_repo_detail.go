@@ -13,6 +13,7 @@ import (
 	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/readme"
 	"bestuav-atlas/internal/store"
+	"bestuav-atlas/internal/ui/icons"
 	"bestuav-atlas/internal/ui/kit"
 )
 
@@ -52,6 +53,33 @@ func clampRating(v int) int {
 	return v
 }
 
+// pageLeading 页头标题左侧的控件：目前只有「仓库详情」需要返回键。
+//
+// 返回键放标题左边而不是页内第一行：详情页是「从列表跳进来」的隐藏页，
+// 标题栏就是它的身份标识，返回也应该是标题栏的一部分，不随内容滚动。
+func (a *App) pageLeading(c *ui.Context, t *ui.Theme) func() {
+	if a.page != "repo-detail" {
+		return nil
+	}
+	return func() { a.repoDetailBack(c, t) }
+}
+
+// repoDetailBack 页头的返回按钮（图标 + 悬浮提示）。
+func (a *App) repoDetailBack(c *ui.Context, t *ui.Theme) {
+	b := ui.Row(c).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).
+		Width(28).Height(28).Radius(t.Radius).Tooltip("返回仓库列表")
+	if b.Hovered() {
+		b.Background(t.SurfaceHover)
+	}
+	b.Children(func() {
+		// 图标集里只有「右箭头」没有「左箭头」：转 180° 就是标准的返回箭头。
+		ui.Icon(c, icons.ChevronRight).FontSize(16).Rotate(180).TextColor(t.TextMuted)
+	})
+	if b.Clicked() {
+		a.page = "repos"
+	}
+}
+
 // repoDetailPage 仓库详情。
 func (a *App) repoDetailPage(c *ui.Context, t *ui.Theme) {
 	u := &a.atlasUI
@@ -71,11 +99,8 @@ func (a *App) repoDetailPage(c *ui.Context, t *ui.Theme) {
 	}
 
 	ui.Column(c).Gap(kit.PageGap).Children(func() {
-		// ---- 标题行 ----
+		// ---- 标题行（返回键在页头标题左侧，见 pageLeading）----
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			if ui.Button(c, "← 返回").Clicked() {
-				a.page = "repos"
-			}
 			ui.Text(c, r.Name).FontSize(22).Bold().SingleLine()
 			kit.Pill(c, t, r.Status, repoStatusColor(t, r.Status))
 			if name := a.atlas().projectName(r.ProjectID); name != "" {
@@ -215,6 +240,9 @@ func (a *App) repoMetaCard(c *ui.Context, t *ui.Theme, r store.Repo) {
 		ui.Row(c).Gap(6).Children(func() {
 			if ui.Button(c, "编辑登记").Clicked() {
 				a.openRepoDialog(r)
+			}
+			if ui.Button(c, "删除登记").Clicked() {
+				a.confirmErase([]int64{r.ID})
 			}
 		})
 	})
