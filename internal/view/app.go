@@ -112,6 +112,14 @@ type App struct {
 	// 字段分列；设置页 detects 变化后写回 settings 并落盘。
 	asyncWorkers float64
 
+	// ---- 仓库页自动刷新 ----
+	// repoRefreshIdx 是频率分段控件的索引（对应 settings.RepoRefreshMinutes）。
+	// repoAutoOn / repoAutoMinutes 是已应用快照，用来在开关或频率变化时重排下一次。
+	repoRefreshIdx  int
+	repoAutoOn      bool
+	repoAutoMinutes int
+	repoAutoAt      time.Time
+
 	// 多实例开关（保存后需重启生效：单实例锁在进程启动时获取）。
 	allowMultiInstance bool
 	appliedMulti       bool
@@ -315,6 +323,8 @@ func newApp(s *settings.Settings) *App {
 		appliedPageIdle: float64(s.PageIdleMinutes),
 		// 后台异步任务最大并发（设置页写回 settings）
 		asyncWorkers: float64(s.AsyncConcurrency),
+		// 仓库自动刷新频率（分段控件用索引；保存值见 settings）
+		repoRefreshIdx: repoRefreshIndex(s.RepoAutoRefreshMinutes),
 		// 任务列表初始演示数据
 		tasks: demoTaskRows(),
 		// 表单初始值
@@ -893,6 +903,8 @@ func (a *App) View(c *ui.Context) {
 	// 0.5) 待办到期提醒：检查已到期待办，必要时发系统通知；没有更近的截止
 	//      时间时每 30 秒唤醒一次（空闲时也能按时提醒）。
 	a.checkTodoDue(c)
+	// 0.6) 仓库页自动刷新：到点用 batchAuto 异步刷新本地状态 + 远端信息。
+	a.checkRepoAutoRefresh(c)
 
 	// 1) 主题源：仅在变化时切换（SetSource 会触发整树重建，不可每帧调用）。
 	if a.themeIdx != a.appliedThemeIdx {

@@ -1,13 +1,16 @@
 package view
 
 import (
+	"context"
 	"math"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"bestuav-atlas/internal/gitx"
 	"bestuav-atlas/internal/settings"
 	"bestuav-atlas/internal/store"
 )
@@ -283,6 +286,75 @@ func TestRepoNameHoverShowsReview(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("这是仓库评价") {
 		t.Fatalf("悬停仓库名没有显示评价；文本：%v", tt.Texts())
+	}
+}
+
+// TestRepoAutoRefreshControls 仓库页的自动刷新开关与频率选择能写回设置。
+func TestRepoAutoRefreshControls(t *testing.T) {
+	a, _ := newTestApp(t)
+	a.reloadAtlas()
+
+	tt := renderPageSized(t, a, "repos", 1440, 900)
+	if !tt.HasText("自动刷新") {
+		t.Fatalf("仓库页没有自动刷新开关；文本：%v", tt.Texts())
+	}
+	if err := tt.Click("自动刷新"); err != nil {
+		t.Fatalf("点自动刷新开关失败: %v", err)
+	}
+	tt.Frame()
+	if !a.settings.RepoAutoRefresh {
+		t.Fatal("自动刷新开关没有写回设置")
+	}
+	for _, label := range []string{"10 分钟", "30 分钟", "1 小时", "3 小时"} {
+		if !tt.HasText(label) {
+			t.Errorf("开启后缺少频率选项 %q", label)
+		}
+	}
+	if err := tt.Click("1 小时"); err != nil {
+		t.Fatalf("点频率失败: %v", err)
+	}
+	tt.Frame()
+	if a.settings.RepoAutoRefreshMinutes != 60 {
+		t.Fatalf("刷新频率未写回设置：%d", a.settings.RepoAutoRefreshMinutes)
+	}
+}
+
+// TestBatchAutoRefreshesLocal 自动刷新至少会刷新本地状态；没有远端令牌时
+// 远端部分静默跳过，不应因此报错。
+func TestBatchAutoRefreshesLocal(t *testing.T) {
+	if !gitx.HasGit() {
+		t.Skip("本机没有 git")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.name", "atlas-test")
+	runGit(t, dir, "config", "user.email", "atlas@example.com")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "init")
+
+	a, st := newTestApp(t)
+	id, err := st.CreateRepo(store.Repo{Name: "demo/repo", LocalPath: dir, Status: RepoUnknown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+	r, ok := a.repoByID(id)
+	if !ok {
+		t.Fatal("仓库没读到")
+	}
+	if err := a.batchOne(context.Background(), batchAuto, r, "", tokenSet{}); err != nil {
+		t.Fatalf("batchAuto 无令牌时不应失败: %v", err)
+	}
+	a.reloadAtlas()
+	got, ok := a.repoByID(id)
+	if !ok {
+		t.Fatal("刷新后仓库没读到")
+	}
+	if got.Status != RepoOK || got.LastCommit == "" {
+		t.Fatalf("自动刷新没有写入本地状态：%+v", got)
 	}
 }
 

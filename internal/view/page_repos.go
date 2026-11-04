@@ -88,6 +88,11 @@ func (a *App) repoPage(c *ui.Context, t *ui.Theme) {
 			})
 		})
 
+		// ---- 自动刷新：开关 + 频率 ----
+		// 放在标题行下方而不是塞进右侧按钮组：频率有四档，窄窗口里和三个
+		// 主操作挤一行会被压扁。
+		a.repoAutoRefreshBar(c, t)
+
 		// ---- 四个状态计数（display.Stat：标签 + 滚动数字）----
 		kit.Card(c, t, func() {
 			ui.Row(c).Gap(28).AlignItems(ui.Center).Wrap().Children(func() {

@@ -84,6 +84,12 @@ type Settings struct {
 	// 存两份只会让用户改一处、忘一处。
 	WorkRoot string `json:"workRoot"`
 
+	// RepoAutoRefresh 仓库页是否按固定间隔自动刷新「本地状态 + 远端信息」。
+	// 自动刷新和手动批量共用异步工作池与最大并发设置；失败仓库跳过、下一轮再试。
+	RepoAutoRefresh bool `json:"repoAutoRefresh"`
+	// RepoAutoRefreshMinutes 自动刷新间隔（分钟），取 RepoRefreshMinutes 之一。
+	RepoAutoRefreshMinutes int `json:"repoAutoRefreshMinutes"`
+
 	// 其它代码托管平台的令牌：一个平台一个，互不通用（Gitee 的私人令牌不能访问
 	// GitHub）。都只存本机、不随配置包导出。Gitea 的实例地址各人不同，单列 GiteaHost。
 	GiteeToken   string `json:"giteeToken"`
@@ -154,7 +160,14 @@ const (
 	// MaxAsyncConcurrency 设置页可调的并发上限。再高只会让几十个 git 进程
 	// 抢同一块磁盘，收益很小。
 	MaxAsyncConcurrency = 8
+
+	// DefaultRepoAutoRefreshMinutes 仓库自动刷新的默认间隔（分钟）。
+	DefaultRepoAutoRefreshMinutes = 30
 )
+
+// RepoRefreshMinutes 仓库自动刷新可选的间隔（分钟），顺序即界面顺序。
+// 10 分钟适合正在密集开发的仓库；3 小时适合长期归档、偶尔看一眼的仓库。
+var RepoRefreshMinutes = []int{10, 30, 60, 180}
 
 // 配色方案（强调色系）的稳定标识：设置文件里存这些字符串，视图层再把它们映射到
 // 具体颜色与展示名。校验放在这里，避免外部手改 JSON 后把界面弄成不可读的颜色。
@@ -206,21 +219,22 @@ var PetSkins = []string{PetSkinCat, PetSkinDog}
 // Default 返回首次启动时的默认偏好。
 func Default() *Settings {
 	return &Settings{
-		Theme:              "system",
-		Palette:            "system",
-		Tone:               ToneDefault,
-		FontSize:           14,
-		CloseMode:          "ask",
-		MenuOpacity:        DefaultMenuOpacity,
-		ContentOpacity:     DefaultContentOpacity,
-		PageIdleMinutes:    DefaultPageIdleMinutes,
-		AsyncConcurrency:   DefaultAsyncConcurrency,
-		PetSkin:            PetSkinCat,
-		PetReminderMinutes: DefaultPetReminderMinutes,
-		PetX:               -1,
-		PetY:               -1,
-		RepoKind:           "github",
-		RepoBranch:         "main",
+		Theme:                  "system",
+		Palette:                "system",
+		Tone:                   ToneDefault,
+		FontSize:               14,
+		CloseMode:              "ask",
+		MenuOpacity:            DefaultMenuOpacity,
+		ContentOpacity:         DefaultContentOpacity,
+		PageIdleMinutes:        DefaultPageIdleMinutes,
+		AsyncConcurrency:       DefaultAsyncConcurrency,
+		RepoAutoRefreshMinutes: DefaultRepoAutoRefreshMinutes,
+		PetSkin:                PetSkinCat,
+		PetReminderMinutes:     DefaultPetReminderMinutes,
+		PetX:                   -1,
+		PetY:                   -1,
+		RepoKind:               "github",
+		RepoBranch:             "main",
 	}
 }
 
@@ -389,6 +403,10 @@ func normalize(s *Settings) {
 	// 异步并发：0 是老文件缺字段（默认值），负数/超上限是脏数据；都回落到默认。
 	if s.AsyncConcurrency < 1 || s.AsyncConcurrency > MaxAsyncConcurrency {
 		s.AsyncConcurrency = DefaultAsyncConcurrency
+	}
+	// 自动刷新间隔只接受预设的几档；老文件缺字段/手改坏值都回落到默认。
+	if !slices.Contains(RepoRefreshMinutes, s.RepoAutoRefreshMinutes) {
+		s.RepoAutoRefreshMinutes = DefaultRepoAutoRefreshMinutes
 	}
 }
 

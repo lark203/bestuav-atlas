@@ -38,6 +38,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	s.MenuOpacity = 0.5
 	s.ContentOpacity = 0.7
 	s.AsyncConcurrency = 6
+	s.RepoAutoRefresh = true
+	s.RepoAutoRefreshMinutes = 60
 	if err := s.Save(); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
@@ -51,7 +53,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		!got.SidebarCollapsed || !got.AllowMultiInstance ||
 		got.BackgroundImage != s.BackgroundImage ||
 		got.MenuOpacity != 0.5 || got.ContentOpacity != 0.7 ||
-		got.AsyncConcurrency != 6 {
+		got.AsyncConcurrency != 6 || !got.RepoAutoRefresh ||
+		got.RepoAutoRefreshMinutes != 60 {
 		t.Fatalf("读取结果与写入不一致: %+v", got)
 	}
 }
@@ -84,23 +87,24 @@ func TestNormalizeBadValues(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	bad, _ := json.Marshal(map[string]any{
-		"theme":              "purple",
-		"palette":            "neon",
-		"tone":               "vaporwave",
-		"fontSize":           99,
-		"closeMode":          "explode",
-		"menuOpacity":        0,   // 老文件没有该字段 → 0，应回落默认
-		"contentOpacity":     9.9, // 越界
-		"asyncConcurrency":   99,  // 越界
-		"petSkin":            "dragon",
-		"petReminderMinutes": 999,
-		"petXP":              -3,
-		"petX":               -9,
-		"petY":               -9,
-		"repoKind":           "svn",
-		"repoToken":          "  tok  ",
-		"repoBranch":         "",
-		"repoPath":           "/profiles/x.zip/",
+		"theme":                  "purple",
+		"palette":                "neon",
+		"tone":                   "vaporwave",
+		"fontSize":               99,
+		"closeMode":              "explode",
+		"menuOpacity":            0,   // 老文件没有该字段 → 0，应回落默认
+		"contentOpacity":         9.9, // 越界
+		"asyncConcurrency":       99,  // 越界
+		"repoAutoRefreshMinutes": 17,  // 不是预设档位
+		"petSkin":                "dragon",
+		"petReminderMinutes":     999,
+		"petXP":                  -3,
+		"petX":                   -9,
+		"petY":                   -9,
+		"repoKind":               "svn",
+		"repoToken":              "  tok  ",
+		"repoBranch":             "",
+		"repoPath":               "/profiles/x.zip/",
 	})
 	if err := os.WriteFile(p, bad, 0o644); err != nil {
 		t.Fatalf("写脏数据: %v", err)
@@ -132,6 +136,9 @@ func TestNormalizeBadValues(t *testing.T) {
 	}
 	if s.AsyncConcurrency != DefaultAsyncConcurrency {
 		t.Errorf("异步并发未回落到默认: %d", s.AsyncConcurrency)
+	}
+	if s.RepoAutoRefreshMinutes != DefaultRepoAutoRefreshMinutes {
+		t.Errorf("自动刷新间隔未回落到默认: %d", s.RepoAutoRefreshMinutes)
 	}
 }
 

@@ -36,6 +36,7 @@ const (
 	batchCommitPush                  // add -A + commit + push
 	batchRemote                      // 调平台 API 拉远端元信息
 	batchClone                       // 从远端克隆到本地根目录
+	batchAuto                        // 自动刷新：本地状态 + 远端信息
 )
 
 // label 动作名，用于页头进度与任务记录。
@@ -49,6 +50,8 @@ func (k batchKind) label() string {
 		return "刷新远端信息"
 	case batchClone:
 		return "克隆仓库"
+	case batchAuto:
+		return "自动刷新"
 	default:
 		return "刷新仓库状态"
 	}
@@ -60,7 +63,7 @@ func batchTimeout(k batchKind) time.Duration {
 	switch k {
 	case batchClone:
 		return 5 * time.Minute
-	case batchPull, batchCommitPush, batchRemote:
+	case batchPull, batchCommitPush, batchRemote, batchAuto:
 		return 90 * time.Second
 	default:
 		return 15 * time.Second
@@ -236,11 +239,18 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 			switch {
 			case failed == 0:
 				a.toast(fmt.Sprintf("%s完成：%d 个仓库", kind.label(), ok))
-				a.celebrate(2)
+				// 自动刷新是后台节奏，成功不撒彩带；手动批量保留庆祝。
+				if kind != batchAuto {
+					a.celebrate(2)
+				}
 			case ok == 0:
 				a.toast("全部失败：" + firstErr)
 			default:
 				a.toast(fmt.Sprintf("%d 个成功、%d 个失败（%s）", ok, failed, firstErr))
+			}
+			if kind == batchAuto {
+				// 窗口在托盘里时 toast 看不见，补一条系统通知；可见时这个函数自己会跳过。
+				a.notifyTaskDone(fmt.Sprintf("自动刷新完成：成功 %d / 失败 %d", ok, failed))
 			}
 			a.requestFrame()
 		})
@@ -289,6 +299,16 @@ func (a *App) batchOne(ctx context.Context, kind batchKind, r store.Repo, commit
 
 	case batchRemote:
 		return a.refreshRemoteOne(ctx, r, tokens)
+
+	case batchAuto:
+		// 先刷本地状态，再在「有该平台令牌」时补一次远端信息。
+		// 没有令牌不是失败：这类仓库只刷新本地状态，静默跳过远端。
+		local := a.refreshRepoStatus(r)
+		p := a.platformForRepo(local)
+		if tokens.tokenFor(p.Host) == "" {
+			return nil
+		}
+		return a.refreshRemoteOne(ctx, local, tokens)
 
 	case batchClone:
 		return a.cloneOne(ctx, r)
@@ -355,8 +375,14 @@ func (a *App) refreshRemoteOne(ctx context.Context, r store.Repo, tokens tokenSe
 		return err
 	}
 	next := r
-	next.StatusMsg = fmt.Sprintf("%s 远端 %s · 最近推送 %s · ★%d · issues %d",
+	remote := fmt.Sprintf("%s 远端 %s · 最近推送 %s · ★%d · issues %d",
 		p.Label(), firstNonEmpty(info.DefaultBranch, "main"), timeAgo(info.PushedAt), info.Stars, info.OpenIssues)
+	// 保留本地状态的原因（如「3 个文件改动」）。上一轮已经是远端文案时不再叠加，
+	// 否则手动连点两次「刷新远端信息」会把同一句重复一遍。
+	if old := strings.TrimSpace(r.StatusMsg); old != "" && !strings.HasPrefix(old, p.Label()+" 远端 ") {
+		remote += " · " + old
+	}
+	next.StatusMsg = remote
 	next.CheckedAt = time.Now()
 	if r.Status == RepoOK || r.Status == RepoUnknown {
 		next.Status = RepoOK
