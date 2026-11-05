@@ -151,16 +151,9 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 		a.toast("先选中要处理的仓库")
 		return
 	}
-	// 「刷新远端信息」必须联网：没令牌时提前拦住，否则每个仓库各报一次
-	// 「请填写令牌」，用户要点掉 N 条提示才知道问题在哪。Gitea 还要实例地址。
+	// 令牌快照：只有「刷新远端信息」的 API 那一步用得上；没有令牌也能跑——
+	// 本地 fetch 不需要令牌，状态照样会更新，只是少了平台元信息。
 	tokens := a.tokensSnapshot()
-	if kind == batchRemote {
-		p := a.platformForRepo(repos[0])
-		if tokens.tokenFor(p.Host) == "" {
-			a.toast("刷新远端信息需要 " + p.Label() + " 令牌：设置 → 工作区")
-			return
-		}
-	}
 
 	limit := a.asyncLimit()
 	label := fmt.Sprintf("%s（%d 个）", kind.label(), len(repos))
@@ -356,40 +349,56 @@ func (a *App) cloneRepos(ids []int64) {
 	a.runRepoBatch(batchClone, ids, "")
 }
 
-// refreshRemoteOne 用平台 API 读一次远端元信息。
+// refreshRemoteOne 刷新一个仓库的远端状态。
 //
-// 本地 git 能回答「我领先/落后远端几个提交」，但回答不了「远端仓库本身怎么样」：
-// 默认分支、最近一次推送、star、未关闭 issue。未克隆的仓库更是连本地状态都没有，
-// 只有 API 能告诉我们它还活着。结果写进 status_msg（本地状态词不动）。
+// 顺序很重要：**先 fetch，再算状态，最后补平台元信息**。
 //
-// 平台由仓库登记里的 Host / URL 决定：GitHub / Gitee / Gitea / AtomGit 各用各的
-// 端点与令牌，见 internal/forge。
+// 旧实现只调平台 API 读元信息、不 fetch：ahead/behind 仍是上次 fetch 的旧引用，
+// 于是「远端有新提交」时点刷新看不到任何变化（用户反馈「刷新远端信息不起作用」）。
+// fetch 只更新远端引用，不动工作区、不产生合并。
+//
+// 平台元信息（默认分支/最近推送/star/issues）是补充说明：没有令牌就跳过，
+// 拿不到也不影响本地状态的刷新。
 func (a *App) refreshRemoteOne(ctx context.Context, r store.Repo, tokens tokenSet) error {
-	p := a.platformForRepo(r)
-	owner, name, ok := forgeOwnerRepo(r, p)
-	if !ok {
-		return fmt.Errorf("无法从地址解析出 owner/repo")
+	local := strings.TrimSpace(r.LocalPath)
+	if local != "" {
+		if st := gitx.Inspect(local); st.IsRepo && st.RemoteURL != "" {
+			if _, err := gitx.Fetch(ctx, local); err != nil {
+				return fmt.Errorf("git fetch 失败：%w", err)
+			}
+		}
 	}
-	info, err := tokens.client(p).Repo(ctx, owner, name)
-	if err != nil {
-		return err
+
+	// fetch 之后重新探测：ahead/behind 现在反映真实远端。
+	next := a.inspectRepo(r)
+
+	p := a.platformForRepo(next)
+	if tokens.tokenFor(p.Host) != "" {
+		if owner, name, ok := forgeOwnerRepo(next, p); ok {
+			if info, err := tokens.client(p).Repo(ctx, owner, name); err == nil {
+				remote := fmt.Sprintf("%s 远端 %s · 最近推送 %s · ★%d · issues %d",
+					p.Label(), firstNonEmpty(info.DefaultBranch, "main"), timeAgo(info.PushedAt), info.Stars, info.OpenIssues)
+				// 保留本地状态的原因（如「3 个文件改动」）；上一轮已是远端文案时不再叠加。
+				if old := strings.TrimSpace(next.StatusMsg); old != "" && !strings.HasPrefix(old, p.Label()+" 远端 ") {
+					remote += " · " + old
+				}
+				next.StatusMsg = remote
+			} else if strings.TrimSpace(next.StatusMsg) == "" {
+				next.StatusMsg = "平台信息读取失败：" + err.Error()
+			}
+		}
 	}
-	next := r
-	remote := fmt.Sprintf("%s 远端 %s · 最近推送 %s · ★%d · issues %d",
-		p.Label(), firstNonEmpty(info.DefaultBranch, "main"), timeAgo(info.PushedAt), info.Stars, info.OpenIssues)
-	// 保留本地状态的原因（如「3 个文件改动」）。上一轮已经是远端文案时不再叠加，
-	// 否则手动连点两次「刷新远端信息」会把同一句重复一遍。
-	if old := strings.TrimSpace(r.StatusMsg); old != "" && !strings.HasPrefix(old, p.Label()+" 远端 ") {
-		remote += " · " + old
-	}
-	next.StatusMsg = remote
 	next.CheckedAt = time.Now()
-	if r.Status == RepoOK || r.Status == RepoUnknown {
-		next.Status = RepoOK
-	}
+
 	if a.store != nil {
 		if err := a.store.SaveRepoStatus(r.ID, next); err != nil {
 			return err
+		}
+		// 分支是观测值，SaveRepoStatus 不写它；变了才整行更新一次（同 refreshRepoStatus）。
+		if next.Branch != r.Branch {
+			if err := a.store.UpdateRepo(next); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

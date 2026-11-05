@@ -257,6 +257,70 @@ func TestHeaderBackNavigates(t *testing.T) {
 	}
 }
 
+// TestRefreshRemoteFetches 「刷新远端信息」必须先 fetch：远端有新提交时状态要变成
+// 「需要更新」。这条测试钉住用户报过的 bug——只调 API、不 fetch 时状态永远不动。
+func TestRefreshRemoteFetches(t *testing.T) {
+	if !gitx.HasGit() {
+		t.Skip("本机没有 git")
+	}
+	src := t.TempDir()
+	runGit(t, src, "init", "-b", "main")
+	runGit(t, src, "config", "user.name", "atlas-test")
+	runGit(t, src, "config", "user.email", "atlas@example.com")
+	if err := os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, src, "add", "-A")
+	runGit(t, src, "commit", "-m", "init")
+
+	bare := filepath.Join(t.TempDir(), "demo.git")
+	runGit(t, t.TempDir(), "clone", "--bare", src, bare)
+
+	local := filepath.Join(t.TempDir(), "local")
+	runGit(t, t.TempDir(), "clone", bare, local)
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, t.TempDir(), "clone", bare, other)
+
+	// 另一个人（另一个克隆）推了一个提交：此时远端领先本地。
+	runGit(t, other, "config", "user.name", "other")
+	runGit(t, other, "config", "user.email", "other@example.com")
+	if err := os.WriteFile(filepath.Join(other, "feature.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, other, "add", "-A")
+	runGit(t, other, "commit", "-m", "remote change")
+	runGit(t, other, "push", "origin", "main")
+
+	a, st := newTestApp(t)
+	// 平台指向一个必然拒绝连接的端口：API 那一步不做，不影响状态刷新。
+	id, err := st.CreateRepo(store.Repo{
+		Name: "team/repo", Host: "127.0.0.1:9", URL: "http://127.0.0.1:9/team/repo",
+		LocalPath: local, Branch: "main", Status: RepoOK,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.reloadAtlas()
+	r, ok := a.repoByID(id)
+	if !ok {
+		t.Fatal("仓库没读到")
+	}
+
+	if err := a.refreshRemoteOne(context.Background(), r, a.tokensSnapshot()); err != nil {
+		t.Fatalf("刷新远端信息失败: %v", err)
+	}
+	after, ok, err := a.store.RepoByID(id)
+	if err != nil || !ok {
+		t.Fatalf("读库失败: %v", err)
+	}
+	if after.Status != RepoBehind {
+		t.Errorf("远端有新提交时应为「%s」，实际 %q（behind=%d）", RepoBehind, after.Status, after.Behind)
+	}
+	if after.Behind < 1 {
+		t.Errorf("behind 应至少为 1，实际 %d", after.Behind)
+	}
+}
+
 // TestEmptyPagesRender 空库时首页/仓库页给出引导，而不是白屏。
 func TestEmptyPagesRender(t *testing.T) {
 	a, _ := newTestApp(t)

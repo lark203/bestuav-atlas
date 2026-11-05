@@ -1,5 +1,17 @@
 # 变更记录
 
+## 0.4.8
+
+- **修复刷新状态时命令行黑框乱闪**：Windows 上 `exec.Command("git", …)` 默认为控制台程序
+  新建窗口，刷新状态 = 每仓库十来个 git 调用 × 十来个仓库，于是满屏闪。`internal/gitx` 现在
+  给子进程加 `HideWindow + CREATE_NO_WINDOW`（`proc_windows.go`，非 Windows 空实现），
+  状态 / 拉取 / 提交 / 推送 / 克隆全部不再弹窗。
+- **修复「刷新远端信息」不生效**：旧实现只调平台 API 读元信息、不 fetch，ahead/behind
+  仍是旧引用，远端有新提交也看不出变化。现在顺序是
+  **`git fetch`（只更新引用、不动工作区）→ 按真实远端重算状态 → 有令牌再补平台信息**；
+  没有令牌也能刷新状态。新增 `TestRefreshRemoteFetches` 钉住这个行为。
+- 两个按钮的分工写进悬浮提示与文档：「刷新状态」纯本地不联网；「刷新远端信息」会 fetch。
+
 ## 0.4.7
 
 - **日期/时间选择器中文化加固**：在创建窗口前 `SetLanguages("zh-Hans")` 并

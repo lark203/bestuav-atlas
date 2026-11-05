@@ -335,6 +335,9 @@ func runIn(ctx context.Context, cmdDir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = cmdDir // 路径只交给 Dir，绝不拼进命令行字符串
 	cmd.Env = gitEnv()
+	// Windows 上不给这个标志，每次 git 调用都会闪一个命令行黑框（刷新状态时
+	// 十几个仓库 × 每个仓库十来个调用 = 满屏闪烁）。非 Windows 上是空实现。
+	hideWindow(cmd)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
