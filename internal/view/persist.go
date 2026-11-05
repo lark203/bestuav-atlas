@@ -18,10 +18,6 @@ import (
 //     界面照常可用（打开失败的原因会写进日志，不影响启动）。
 
 const (
-	// flagDemoSeeded 元数据键：演示任务是否已灌入数据库。
-	// 用它而不是「表为空就灌」——否则用户清空任务后，下次启动又会被灌回来。
-	flagDemoSeeded = "seeded_demo_tasks"
-
 	// maxTaskRows 任务列表在内存与库中各自保留的最大条数。
 	maxTaskRows = 20
 
@@ -64,27 +60,11 @@ type persistedData struct {
 	licenses []licRecord
 }
 
-// readPersisted 从库中读取任务列表与授权历史（首次运行顺带灌入演示任务）。
+// readPersisted 从库中读取任务列表与授权历史。
 //
 // 只有数据库操作，不读写 App 字段，因此可以安全地在后台协程里跑。
 func readPersisted(s *store.Store) persistedData {
 	var d persistedData
-
-	// 首次运行：把演示任务写进库，让「任务队列」不是空的（之后一律以库为准）。
-	if _, ok, err := s.Flag(flagDemoSeeded); err == nil && !ok {
-		rows := demoTaskRows()
-		// 倒序插入：查询按 id DESC，倒着写才能让展示顺序与原演示顺序一致。
-		for i := len(rows) - 1; i >= 0; i-- {
-			r := rows[i]
-			if _, err := s.InsertTask(r.name, r.kind, r.status, r.cost); err != nil {
-				logging.Errv("store", "灌入演示任务失败", err)
-				break
-			}
-		}
-		if err := s.SetFlag(flagDemoSeeded, "1"); err != nil {
-			logging.Errv("store", "写入初始化标记失败", err)
-		}
-	}
 
 	if rows, err := s.RecentTasks(maxTaskRows); err != nil {
 		logging.Errv("store", "读取任务记录失败", err)
@@ -123,7 +103,15 @@ func (a *App) loadPersisted() {
 func tasksFromStore(rows []store.Task) []taskRow {
 	out := make([]taskRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, taskRow{name: r.Name, kind: r.Kind, status: r.Status, cost: r.Cost})
+		out = append(out, taskRow{
+			name:     r.Name,
+			kind:     r.Kind,
+			status:   r.Status,
+			detail:   r.Detail,
+			duration: time.Duration(r.DurationMS) * time.Millisecond,
+			costText: r.Cost,
+			at:       r.CreatedAt,
+		})
 	}
 	return out
 }
@@ -144,11 +132,17 @@ func licensesFromStore(rows []store.License) []licRecord {
 }
 
 // persistTask 把一条新任务写入数据库（失败只记日志，不影响界面）。
-func (a *App) persistTask(name, kind, status, cost string) {
+func (a *App) persistTask(name, kind, status, detail string, dur time.Duration) {
 	if a.store == nil {
 		return
 	}
-	if _, err := a.store.InsertTask(name, kind, status, cost); err != nil {
+	if _, err := a.store.InsertTaskRecord(store.Task{
+		Name:       name,
+		Kind:       kind,
+		Status:     status,
+		Detail:     detail,
+		DurationMS: dur.Milliseconds(),
+	}); err != nil {
 		logging.Errv("store", "写入任务记录失败", err, "name", name)
 		return
 	}

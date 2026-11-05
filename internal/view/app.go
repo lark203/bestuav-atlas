@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -119,6 +120,9 @@ type App struct {
 	repoAutoOn      bool
 	repoAutoMinutes int
 	repoAutoAt      time.Time
+	// repoAutoLoop 保证后台自动刷新计时器只启动一次：窗口收进托盘 / 最小化后
+	// 帧循环不再推进，自动刷新必须靠独立计时器，而不是 View 里的 c.After。
+	repoAutoLoop sync.Once
 
 	// 多实例开关（保存后需重启生效：单实例锁在进程启动时获取）。
 	allowMultiInstance bool
@@ -325,8 +329,6 @@ func newApp(s *settings.Settings) *App {
 		asyncWorkers: float64(s.AsyncConcurrency),
 		// 仓库自动刷新频率（分段控件用索引；保存值见 settings）
 		repoRefreshIdx: repoRefreshIndex(s.RepoAutoRefreshMinutes),
-		// 任务列表初始演示数据
-		tasks: demoTaskRows(),
 		// 表单初始值
 		lic: defaultLicForm(),
 		// 组件演示页的默认值（选中项用 -1 表示「未选中」）
@@ -487,7 +489,12 @@ func (a *App) SetInvalidator(fn func()) { a.invalidate = fn }
 
 // SetWindow 由 main 注入主窗口句柄。浮出面板等子窗口需要它作为 Parent；
 // 未注入（离屏渲染 / 单测）时为 nil，相关入口自动降级。
-func (a *App) SetWindow(w *mygo.Window) { a.win = w }
+func (a *App) SetWindow(w *mygo.Window) {
+	a.win = w
+	// 自动刷新不能依赖 View 的帧循环：窗口收进托盘 / 最小化后不再有帧，
+	// c.After 排的唤醒也就不会来。这里起一个独立计时器，到点直接回主线程。
+	a.startRepoAutoLoop()
+}
 
 // SetPage 设置启动页（命令行 --page / 单实例转发用）。不存在的 id 忽略。
 func (a *App) SetPage(id string) {
@@ -686,48 +693,9 @@ func (a *App) applyBackdropTheme(t *ui.Theme) {
 }
 
 // ---- 轻量级任务进度 ----
-
-// startLightTask 演示一条「轻量级任务」：进度条画在页头下方分割线的槽位里。
-// 真实业务只需把 goroutine 里的模拟循环换成实际工作，并在完成时调用 endTask。
-func (a *App) startLightTask(label string) {
-	if a.taskRunning {
-		return // 同一时刻只显示一条轻量任务进度
-	}
-	a.taskRunning = true
-	a.taskProgress = 0
-	a.taskLabel = label
-
-	go func() {
-		// 后台协程里的 panic 不会经过 View 的 recover，单独兜一层。
-		defer logging.Recover("light-task")
-		const steps = 24
-		for i := 1; i <= steps; i++ {
-			time.Sleep(90 * time.Millisecond)
-			v := float64(i) / steps
-			mygo.RunOnMain(func() {
-				a.taskProgress = v
-				a.requestFrame()
-			})
-		}
-		mygo.RunOnMain(a.endTask)
-	}()
-}
-
-// endTask 结束轻量任务：分割线恢复常态，并撒彩带庆祝（用户要求的「完成时烟花/彩带秀」）。
-func (a *App) endTask() {
-	// 完成的轻量任务也进队列（与重量级对称）：不记的话「跑过什么」无从查起，
-	// 状态列也就没有脉冲可看。标签要在清空之前读。
-	if label := a.taskLabel; label != "" {
-		a.pushTaskRow(label, "轻量级", "已完成")
-		// 窗口在托盘里时界面效果看不见，补一条系统通知。
-		a.notifyTaskDone(label + "（轻量级）")
-	}
-	a.taskRunning = false
-	a.taskProgress = 0
-	a.taskLabel = ""
-	a.celebrate(3)
-	a.requestFrame()
-}
+//
+// 演示用的「轻量级任务」已经移除：任务队列只记录真实动作。页头那条进度线
+// 仍然保留，由真正的后台批量任务（runRepoBatch / 本地导入）驱动。
 
 // runClose 通过注入的回调执行关闭行为。
 func (a *App) runClose(mode string) {

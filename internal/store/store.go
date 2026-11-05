@@ -40,7 +40,8 @@ import (
 // 4：仓库评分与评价、待办重要/紧急
 // 5：仓库所在平台主机
 // 6：待办到期提醒的已通知时刻（notified_at）
-const schemaVersion = "6"
+// 7：任务记录补充失败原因（detail）与真实耗时（duration_ms）
+const schemaVersion = "7"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -53,11 +54,16 @@ type Store struct {
 
 // Task 一条异步任务记录。
 type Task struct {
-	ID        int64
-	Name      string
-	Kind      string // 轻量级 / 重量级
-	Status    string // 已完成 / 运行中 / 排队 / 失败
-	Cost      string // 耗时展示文本（如 "0.8s"、"刚刚"）
+	ID     int64
+	Name   string
+	Kind   string // 任务来源：手动 / 自动 / 导入
+	Status string // 已完成 / 运行中 / 排队 / 失败
+	// Detail 结果摘要或失败原因（如「成功 8 / 失败 2；xl/repo：认证失败」）。
+	Detail string
+	// DurationMS 实际执行耗时（毫秒）；0 = 未知（v7 之前的历史记录）。
+	DurationMS int64
+	// Cost 旧的耗时展示文本，只用于读取历史数据；新记录一律写 DurationMS。
+	Cost      string
 	CreatedAt time.Time
 }
 
@@ -158,6 +164,8 @@ func (s *Store) migrate() error {
 			kind       TEXT NOT NULL,
 			status     TEXT NOT NULL,
 			cost       TEXT NOT NULL DEFAULT '',
+			detail     TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_task_created_at ON task(created_at DESC)`,
@@ -298,6 +306,10 @@ func (s *Store) addMissingColumns() error {
 			{"urgent", `urgent INTEGER NOT NULL DEFAULT 0`},
 			{"notified_at", `notified_at TEXT NOT NULL DEFAULT ''`},
 		}},
+		{"task", []addColumn{
+			{"detail", `detail TEXT NOT NULL DEFAULT ''`},
+			{"duration_ms", `duration_ms INTEGER NOT NULL DEFAULT 0`},
+		}},
 	}
 	for _, p := range plan {
 		existing, err := s.tableColumns(p.table)
@@ -421,11 +433,20 @@ func (s *Store) ClearPagePrefs() (int64, error) {
 
 // ---- 任务 ----
 
-// InsertTask 追加一条任务记录。
+// InsertTask 追加一条任务记录（旧签名：耗时写成展示文本，保留给历史/测试用）。
+//
+// 新代码请用 InsertTaskRecord：它带失败原因与真实耗时（毫秒），任务队列靠这两列
+// 展示「出了什么事、跑了多久」。
 func (s *Store) InsertTask(name, kind, status, cost string) (int64, error) {
+	return s.InsertTaskRecord(Task{Name: name, Kind: kind, Status: status, Cost: cost})
+}
+
+// InsertTaskRecord 追加一条任务记录（完整字段）。
+func (s *Store) InsertTaskRecord(t Task) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO task(name, kind, status, cost, created_at) VALUES(?, ?, ?, ?, ?)`,
-		name, kind, status, cost, nowText())
+		`INSERT INTO task(name, kind, status, cost, detail, duration_ms, created_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		t.Name, t.Kind, t.Status, t.Cost, t.Detail, t.DurationMS, nowText())
 	if err != nil {
 		return 0, fmt.Errorf("store: 写入任务失败: %w", err)
 	}
@@ -435,7 +456,7 @@ func (s *Store) InsertTask(name, kind, status, cost string) (int64, error) {
 // RecentTasks 取最近 limit 条任务（按时间倒序）。
 func (s *Store) RecentTasks(limit int) ([]Task, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, kind, status, cost, created_at
+		`SELECT id, name, kind, status, cost, detail, duration_ms, created_at
 		   FROM task ORDER BY id DESC LIMIT ?`, clampLimit(limit))
 	if err != nil {
 		return nil, fmt.Errorf("store: 查询任务失败: %w", err)
@@ -446,7 +467,7 @@ func (s *Store) RecentTasks(limit int) ([]Task, error) {
 	for rows.Next() {
 		var t Task
 		var created string
-		if err := rows.Scan(&t.ID, &t.Name, &t.Kind, &t.Status, &t.Cost, &created); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Kind, &t.Status, &t.Cost, &t.Detail, &t.DurationMS, &created); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = parseTime(created)

@@ -157,6 +157,7 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 
 	limit := a.asyncLimit()
 	label := fmt.Sprintf("%s（%d 个）", kind.label(), len(repos))
+	started := time.Now()
 	a.taskRunning = true
 	a.taskProgress = 0
 	a.taskLabel = label
@@ -228,7 +229,19 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 			if failed > 0 {
 				status = "失败"
 			}
-			a.pushTaskRow(fmt.Sprintf("%s（成功 %d / 失败 %d）", label, ok, failed), "轻量级", status)
+			// 任务队列记「谁发起、跑了多久、出了什么事」：耗时是真实的墙钟时间。
+			detail := fmt.Sprintf("成功 %d / 失败 %d", ok, failed)
+			if failed == 0 {
+				detail = fmt.Sprintf("全部成功（%d 个仓库）", ok)
+			}
+			if firstErr != "" {
+				detail += "；首个失败：" + firstErr
+			}
+			source := "手动"
+			if kind == batchAuto {
+				source = "自动"
+			}
+			a.pushTaskRow(kind.label(), source, status, detail, time.Since(started))
 			switch {
 			case failed == 0:
 				a.toast(fmt.Sprintf("%s完成：%d 个仓库", kind.label(), ok))
@@ -543,6 +556,7 @@ func (a *App) startLocalImport(dirs []string, projectID int64) {
 	// 快照既有的仓库登记：去重逻辑在协程里跑，不能再去读 a.atlas()。
 	existing := append([]store.Repo(nil), a.atlas().repos...)
 	label := "从本地导入（" + itoa(len(dirs)) + " 个文件夹）"
+	started := time.Now()
 	// 导入弹窗先关掉：接下来是遮罩的世界，弹窗留在下面没有意义。
 	a.closeAtlasDialog()
 	a.heavyRunning = true
@@ -572,7 +586,17 @@ func (a *App) startLocalImport(dirs []string, projectID int64) {
 			if failed > 0 {
 				status = "失败"
 			}
-			a.pushTaskRow(label+"（导入 "+itoa(added)+" / 跳过 "+itoa(skipped)+"）", "重量级", status)
+			detail := "导入 " + itoa(added) + " 个"
+			if skipped > 0 {
+				detail += "，跳过 " + itoa(skipped) + " 个"
+			}
+			if failed > 0 {
+				detail += "，失败 " + itoa(failed) + " 个"
+			}
+			if firstSkip != "" {
+				detail += "；首个跳过：" + firstSkip
+			}
+			a.pushTaskRow("从本地导入", "导入", status, detail, time.Since(started))
 			msg := "已从本地导入 " + itoa(added) + " 个仓库"
 			if skipped > 0 {
 				msg += "，跳过 " + itoa(skipped) + " 个"

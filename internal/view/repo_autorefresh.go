@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/ELY-Open-Source/CrychicUI/choice"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/settings"
 )
 
@@ -95,19 +97,28 @@ func (a *App) repoAutoRefreshBar(c *ui.Context, t *ui.Theme) {
 	})
 }
 
-// checkRepoAutoRefresh 每帧检查一次是否到点；没到点就按剩余时间安排下一次唤醒。
+// checkRepoAutoRefresh 每帧兜底调度：界面可见时把下一次唤醒排进帧循环。
 //
-// 和待办提醒一样，c.After 只在最后真正空闲时生效；有动画/悬停帧时每帧检查，
-// 不会漏掉到点时刻。已有任务或读取列表进行中时跳过这一轮，避免叠任务。
+// 执行逻辑在 tickRepoAutoRefresh 里，与托盘计时器共用。
 func (a *App) checkRepoAutoRefresh(c *ui.Context) {
-	// 离屏测试没有窗口，也没有真实的定时器需求。
-	if a.win == nil || a.store == nil {
-		return
+	if d := a.tickRepoAutoRefresh(); d > 0 {
+		c.After(d)
+	}
+}
+
+// tickRepoAutoRefresh 在主线程检查一次：到点就跑一轮，返回建议的下次检查间隔。
+//
+// 有两个驱动源，共用 repoAutoAt：界面可见时由帧循环（c.After）驱动；窗口收进
+// 托盘 / 最小化、View 不再被调用时，由 startRepoAutoLoop 的计时器驱动。先到者
+// 把 repoAutoAt 推后，另一个看到时间未到就什么都不做——不会重复跑。
+func (a *App) tickRepoAutoRefresh() time.Duration {
+	if a.store == nil {
+		return 0
 	}
 	if !a.settings.RepoAutoRefresh {
 		a.repoAutoOn = false
 		a.repoAutoAt = time.Time{}
-		return
+		return 0
 	}
 
 	minutes := a.repoAutoIntervalMinutes()
@@ -119,12 +130,10 @@ func (a *App) checkRepoAutoRefresh(c *ui.Context) {
 		a.repoAutoOn = true
 		a.repoAutoMinutes = minutes
 		a.repoAutoAt = now.Add(interval)
-		c.After(time.Until(a.repoAutoAt))
-		return
+		return interval
 	}
 	if now.Before(a.repoAutoAt) {
-		c.After(time.Until(a.repoAutoAt))
-		return
+		return time.Until(a.repoAutoAt)
 	}
 
 	// 到点：先排下一轮，再决定这一轮跑不跑（跑起来后 taskRunning 会拦住
@@ -135,5 +144,27 @@ func (a *App) checkRepoAutoRefresh(c *ui.Context) {
 			a.runRepoBatch(batchAuto, ids, "")
 		}
 	}
-	c.After(time.Until(a.repoAutoAt))
+	return interval
+}
+
+// repoAutoTick 后台计时器的节拍：最短档位是 10 分钟，20 秒的检查粒度足够，
+// 也不会让后台线程频繁唤醒主线程。
+const repoAutoTick = 20 * time.Second
+
+// startRepoAutoLoop 起一个与帧循环无关的计时器。
+//
+// 为什么需要它：窗口收进托盘或最小化后，View 不再被调用，c.After 排的唤醒
+// 永远不会到来——自动刷新看起来「只有打开主页面才执行」。计时器只负责定时把
+// 检查丢回主线程，其余判断仍由 tickRepoAutoRefresh 完成。
+func (a *App) startRepoAutoLoop() {
+	a.repoAutoLoop.Do(func() {
+		go func() {
+			defer logging.Recover("repo-auto-loop")
+			t := time.NewTicker(repoAutoTick)
+			defer t.Stop()
+			for range t.C {
+				mygo.RunOnMain(func() { a.tickRepoAutoRefresh() })
+			}
+		}()
+	})
 }

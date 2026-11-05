@@ -321,6 +321,74 @@ func TestRefreshRemoteFetches(t *testing.T) {
 	}
 }
 
+// TestTaskRowRecordsDetailAndDuration 任务队列记录真实耗时与失败原因，并落到数据库。
+func TestTaskRowRecordsDetailAndDuration(t *testing.T) {
+	a, st := newTestApp(t)
+	a.pushTaskRow("批量拉取更新", "手动", "失败", "xl/repo：认证失败", 1500*time.Millisecond)
+
+	if len(a.tasks) != 1 {
+		t.Fatalf("应有 1 条任务，实际 %d", len(a.tasks))
+	}
+	if got := a.tasks[0].detail; got != "xl/repo：认证失败" {
+		t.Errorf("失败原因没记下来：%q", got)
+	}
+	if got := a.tasks[0].duration; got != 1500*time.Millisecond {
+		t.Errorf("耗时应为 1.5s，实际 %v", got)
+	}
+
+	rows, err := st.RecentTasks(10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("读库失败: %v（%d 条）", err, len(rows))
+	}
+	if rows[0].Detail != "xl/repo：认证失败" || rows[0].DurationMS != 1500 {
+		t.Errorf("落库字段不对：%+v", rows[0])
+	}
+
+	a.page = "task"
+	tt := renderPage(t, a, "task")
+	for _, want := range []string{"批量拉取更新", "手动", "失败", "1.5s", "xl/repo：认证失败"} {
+		if !tt.HasText(want) {
+			t.Errorf("任务表缺少 %q；实际文本：%v", want, tt.Texts())
+		}
+	}
+}
+
+// TestRepoAutoRefreshTicksWithoutFrames 自动刷新不依赖帧循环：没有窗口帧
+// （托盘 / 最小化）时，只要到点，tick 也会启动一轮并排好下一轮。
+func TestRepoAutoRefreshTicksWithoutFrames(t *testing.T) {
+	a, st := newTestApp(t)
+	seedAtlas(t, a, st)
+	// 后台协程在测试结束后还会写一次库：先睡一会再让 newTestApp 注册的
+	// cleanup 关库，避免出现 "database is closed" 噪声日志。
+	t.Cleanup(func() { time.Sleep(300 * time.Millisecond) })
+	a.settings.RepoAutoRefresh = true
+
+	// 刚开启：从下一个完整间隔开始，不立刻联网。
+	if d := a.tickRepoAutoRefresh(); d <= 0 || a.taskRunning {
+		t.Fatalf("刚开启应先排期、不执行：d=%v running=%v", d, a.taskRunning)
+	}
+
+	// 把时间拨到「已到点」：没有窗口、没有帧，也应该启动自动刷新。
+	a.repoAutoOn = true
+	a.repoAutoMinutes = a.repoAutoIntervalMinutes()
+	a.repoAutoAt = time.Now().Add(-time.Second)
+	if d := a.tickRepoAutoRefresh(); d <= 0 {
+		t.Fatalf("到点后应返回下一轮间隔，实际 %v", d)
+	}
+	if !a.taskRunning {
+		t.Fatal("到点应启动自动刷新（不需要窗口帧）")
+	}
+	if !a.repoAutoAt.After(time.Now()) {
+		t.Error("到点后应把 repoAutoAt 推到下一轮")
+	}
+
+	// 收尾：后台协程的结果回调依赖真实主循环，测试里不会执行，手动复位即可。
+	a.taskRunning = false
+	a.taskProgress = 0
+	a.taskLabel = ""
+	a.atlasUI.busy = false
+}
+
 // TestEmptyPagesRender 空库时首页/仓库页给出引导，而不是白屏。
 func TestEmptyPagesRender(t *testing.T) {
 	a, _ := newTestApp(t)

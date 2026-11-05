@@ -106,11 +106,8 @@ func navRegistry() []navGroup {
 		{title: "工具", items: []navItem{
 			{id: "task", label: "异步任务", icon: icons.Bolt, build: (*App).taskPage,
 				// 任务列表要"切回来还在"，用缓存；闲置 30 分钟再由全局规则带走。
-				policy: pagePolicy{keep: keepCached},
-				tools: []toolAction{
-					{icon: icons.Bolt, label: "轻量任务", tip: "运行一个轻量级任务（进度显示在页头浅线处）"},
-					{icon: icons.Sparkles, label: "演示彩带", tip: "撒一把彩带看看效果"},
-				}},
+				// 没有页头工具：任务记录全部由真实动作产生，演示按钮已移除。
+				policy: pagePolicy{keep: keepCached}},
 			{id: "gen-license", label: "生成 license", icon: icons.FileKey, build: (*App).licensePage,
 				// 表单类页面：每次进入都要一份干净的表单，故不缓存。
 				policy: pagePolicy{keep: keepFresh},

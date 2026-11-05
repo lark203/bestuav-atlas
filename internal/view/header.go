@@ -172,12 +172,10 @@ func (a *App) toolButton(c *ui.Context, t *ui.Theme, tool toolAction) {
 		ui.Icon(c, tool.icon).FontSize(16).TextColor(t.TextMuted)
 	})
 	if btn.Clicked() {
-		// 有具体动作就执行（如「演示彩带」「复制结果」）；没有则默认演示一条
-		// 轻量任务（进度画在页头下方的分割线槽位里），便于新页面直接挂按钮。
+		// 有具体动作就执行（如「演示彩带」「复制结果」）；没有动作的按钮什么也不做，
+		// 不再退化成「演示一条任务」——任务队列现在只记录真实动作。
 		if tool.run != nil {
 			tool.run(a)
-		} else {
-			a.startLightTask(tool.label)
 		}
 	}
 }

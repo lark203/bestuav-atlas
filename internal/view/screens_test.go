@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"bestuav-atlas/internal/store"
 )
@@ -42,7 +43,13 @@ func TestScreenshots(t *testing.T) {
 	}
 	a.reloadAtlas()
 
+	// 异步任务页：几条真实动作记录（含失败原因与真实耗时），让截图能看出
+	// 任务队列现在记录什么。pushTaskRow 会同时写内存与库。
+	a.pushTaskRow("从本地导入", "导入", "已完成", "导入 5 个，跳过 1 个；首个跳过：bestuav-docs（已在列表中）", 12*time.Second+300*time.Millisecond)
+	a.pushTaskRow("自动刷新", "自动", "失败", "1 个成功 / 1 个失败；首个失败：lark203/bestuav-mygo：认证失败", 820*time.Millisecond)
+	a.pushTaskRow("批量拉取更新", "手动", "已完成", "全部成功（2 个仓库）", 2400*time.Millisecond)
 	// 详情页：把第一个仓库指到有 README 的本地目录，并补上评分与评价。
+
 	readmeDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(readmeDir, "README.md"), []byte(
 		"# bestuav-atlas\n\n"+
@@ -82,7 +89,7 @@ func TestScreenshots(t *testing.T) {
 		}
 	}
 
-	for _, page := range []string{"home", "todos", "projects", "repos", "settings"} {
+	for _, page := range []string{"home", "todos", "projects", "repos", "task", "settings"} {
 		a.page = page
 		save("atlas-" + page)
 	}

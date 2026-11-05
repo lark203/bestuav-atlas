@@ -7,7 +7,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/ui/kit"
 	"bestuav-atlas/internal/view/fx"
 )
@@ -69,43 +68,9 @@ func (a *App) drawCelebration(c *ui.Context) {
 }
 
 // ---- 重量级任务：全局遮罩 ----
-
-// startHeavyTask 运行一个「重量级任务」：期间整个窗口被遮罩盖住，用户无法
-// 操作任何控件（也点不到关闭按钮，因为遮罩在最上层）。
 //
-// 真实业务把 goroutine 里的模拟循环换成实际工作即可；结束时 endHeavyTask。
-func (a *App) startHeavyTask(label string) {
-	if a.heavyRunning {
-		return // 重量级任务串行执行
-	}
-	a.heavyRunning = true
-	a.heavyProgress = 0
-	a.heavyLabel = label
-
-	go func() {
-		// 后台协程里的 panic 不会经过 View 的 recover，单独兜一层。
-		defer logging.Recover("heavy-task")
-		const steps = 40
-		for i := 1; i <= steps; i++ {
-			time.Sleep(110 * time.Millisecond)
-			v := float64(i) / steps
-			mygo.RunOnMain(func() {
-				a.heavyProgress = v
-				a.requestFrame()
-			})
-		}
-		mygo.RunOnMain(func() {
-			a.heavyRunning = false
-			a.heavyProgress = 0
-			label := a.heavyLabel
-			a.heavyLabel = ""
-			a.celebrate(5) // 重量级任务完成后放更多彩带
-			a.pushTaskRow(label+"（重量级）", "重量级", "已完成")
-			a.notifyTaskDone(label + "（重量级）")
-			a.requestFrame()
-		})
-	}()
-}
+// 没有「演示重量级任务」了：遮罩由真实的高成本动作驱动（本地文件夹导入、
+// 批量克隆），它们自己维护 heavyRunning / heavyProgress。
 
 // heavyTaskMask 绘制重量级任务遮罩。
 //
