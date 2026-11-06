@@ -1,6 +1,7 @@
 package view
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ELY-Open-Source/CrychicUI/display"
@@ -83,7 +84,138 @@ func (a *App) overviewPage(c *ui.Context, t *ui.Theme) {
 
 		// ---- 四象限 ----
 		a.quadrantsCard(c, t)
+
+		// ---- 月度节奏 ----
+		a.monthlyCard(c, t)
 	})
+}
+
+// ---- 月度统计 ----
+
+// monthStat 一个月的任务统计。
+type monthStat struct {
+	Label   string // 2026-06
+	Created int    // 当月新建
+	Done    int    // 当月完成
+	Overdue int    // 当月截止且逾期（未完成已过期，或完成时间晚于截止）
+}
+
+// monthStats 最近 n 个月（含本月）的统计。
+//
+// 口径：
+//   - 新建：created_at 落在该月；
+//   - 完成：done_at 落在该月（历史数据没有 done_at 的，不重复计入）；
+//   - 逾期：截止日落在该月，且（已完成时 done_at 晚于截止日，未完成时现在已过截止日）。
+//
+// 逾期按「截止日」归月而不是按完成时间，这样「这个月欠了多少」一眼能看出来。
+func monthStats(todos []store.Todo, now time.Time, n int) []monthStat {
+	if n <= 0 {
+		return nil
+	}
+	base := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	out := make([]monthStat, 0, n)
+	for i := n - 1; i >= 0; i-- {
+		start := base.AddDate(0, -i, 0)
+		end := start.AddDate(0, 1, 0)
+		s := monthStat{Label: start.Format("2006-01")}
+		for _, td := range todos {
+			if inMonth(td.CreatedAt, start, end) {
+				s.Created++
+			}
+			if inMonth(td.DoneAt, start, end) {
+				s.Done++
+			}
+			if inMonth(td.DueAt, start, end) {
+				switch {
+				case !td.DoneAt.IsZero():
+					if td.DoneAt.After(td.DueAt) {
+						s.Overdue++
+					}
+				case td.Status != TodoDone && now.After(td.DueAt):
+					s.Overdue++
+				}
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// inMonth 判断 t 是否落在 [start, end) 且非零值。
+func inMonth(t, start, end time.Time) bool {
+	return !t.IsZero() && !t.Before(start) && t.Before(end)
+}
+
+// monthlyCard 总览底部的「月度节奏」：近 6 个月的新建 / 完成 / 逾期。
+func (a *App) monthlyCard(c *ui.Context, t *ui.Theme) {
+	stats := monthStats(a.atlas().todos, time.Now(), 6)
+	max := 1
+	for _, s := range stats {
+		if v := maxInt(s.Created, s.Done); v > max {
+			max = v
+		}
+	}
+	// 本月单独点名：它是用户最关心的那一个月。
+	cur := stats[len(stats)-1]
+	summary := fmt.Sprintf("本月新建 %d · 完成 %d", cur.Created, cur.Done)
+	if cur.Overdue > 0 {
+		summary += " · 逾期 " + itoa(cur.Overdue)
+	}
+
+	kit.Card(c, t, func() {
+		kit.CardHeader(c, t, "月度节奏", summary, nil)
+		ui.Column(c).Gap(7).Children(func() {
+			for _, s := range stats {
+				a.monthRow(c, t, s, max)
+			}
+		})
+		ui.Text(c, "新建按创建时间、完成按完成时间、逾期按截止日归月；逾期 = 完成晚于截止或至今未完成").
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+	})
+}
+
+// monthRow 一个月：标签 + 两条比例条（新建 / 完成）+ 数字 + 逾期。
+func (a *App) monthRow(c *ui.Context, t *ui.Theme, s monthStat, max int) {
+	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		label := ui.Text(c, s.Label).Width(58).Shrink(0).
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+		if s.Label == time.Now().Format("2006-01") {
+			label.Bold().TextColor(t.Accent)
+		}
+		ui.Column(c).Gap(2).Width(180).Shrink(0).Children(func() {
+			monthBar(c, t, float32(s.Created)/float32(max), t.Accent)
+			monthBar(c, t, float32(s.Done)/float32(max), t.Success)
+		})
+		ui.Text(c, fmt.Sprintf("新建 %d · 完成 %d", s.Created, s.Done)).
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+		ui.Text(c, "").Grow(1)
+		if s.Overdue > 0 {
+			kit.Pill(c, t, "逾期 "+itoa(s.Overdue), t.Danger)
+		}
+	})
+}
+
+// monthBar 一条按比例填充的细条；ratio 为 0 时只画轨道。
+func monthBar(c *ui.Context, t *ui.Theme, ratio float32, col ui.Color) {
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	ui.Row(c).Width(180).Height(5).Radius(2.5).Background(t.SurfacePressed).Children(func() {
+		if ratio > 0 {
+			ui.Box(c).Width(180 * ratio).Height(5).Radius(2.5).Background(col)
+		}
+	})
+}
+
+// maxInt 两个整数的较大值。
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // quadrantDefs 四象限的标题、做事原则与配色。
@@ -185,7 +317,7 @@ func (a *App) quadrantTodoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 			a.setTodoStatus(td.ID, TodoDone)
 		}
 		tooltipIfSet(ui.Text(c, td.Title).Grow(1).SingleLine().FontSize(t.FontSize-2), td.Note)
-		if label, overdue := countdownText(td.DueAt); label != "" {
+		if label, overdue := todoCountdown(td); label != "" {
 			col := t.TextMuted
 			if overdue {
 				col = t.Danger
@@ -267,7 +399,7 @@ func (a *App) overviewTodoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 		if name := a.atlas().projectName(td.ProjectID); name != "" {
 			kit.Pill(c, t, name, t.Accent)
 		}
-		if label, overdue := countdownText(td.DueAt); label != "" {
+		if label, overdue := todoCountdown(td); label != "" {
 			col := t.TextMuted
 			if overdue {
 				col = t.Danger

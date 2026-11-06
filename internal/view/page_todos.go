@@ -2,6 +2,7 @@ package view
 
 import (
 	"strings"
+	"time"
 
 	"github.com/ELY-Open-Source/CrychicUI/choice"
 	"github.com/egoist/mygo/ui"
@@ -59,7 +60,7 @@ func (a *App) todoPage(c *ui.Context, t *ui.Theme) {
 		// ---- 列表 ----
 		rows := a.filteredTodos()
 		kit.Card(c, t, func() {
-			kit.CardHeader(c, t, "待办", "勾选即完成；截止时间过了会标红并显示逾期时长。", nil)
+			kit.CardHeader(c, t, "待办", "勾选即完成；逾期的标红，完成后的逾期时长会冻结在完成那一刻。", nil)
 			if len(rows) == 0 {
 				kit.EmptyHint(c, t, "这里还没有待办。在上面输入框里写一件小事，回车即可。")
 				return
@@ -98,6 +99,10 @@ func (a *App) todoFilterBar(c *ui.Context, t *ui.Theme) {
 			u.todoFilter = got
 		}
 		choice.Dropdown(c, "项目筛选", projectOpts, &u.todoProject)
+		choice.Toggle(c, "今天要做", &u.todoTodayOnly)
+		if u.todoTodayOnly {
+			ui.Text(c, "开始日 ≤ 今天 ≤ 截止日").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+		}
 		ui.TextInput(c, &u.todoSearch).Width(200).Placeholder("搜索标题 / 备注")
 	})
 }
@@ -107,9 +112,13 @@ func (a *App) filteredTodos() []store.Todo {
 	d := a.atlas()
 	u := &a.atlasUI
 	q := strings.ToLower(strings.TrimSpace(u.todoSearch))
+	now := time.Now()
 	out := make([]store.Todo, 0, len(d.todos))
 	for _, td := range d.sortedTodos() {
 		if u.todoFilter != "" && u.todoFilter != "全部" && td.Status != u.todoFilter {
+			continue
+		}
+		if u.todoTodayOnly && !todoActiveToday(td, now) {
 			continue
 		}
 		if u.todoProject != "" && u.todoProject != "全部项目" &&
@@ -164,7 +173,7 @@ func (a *App) todoRow(c *ui.Context, t *ui.Theme, td store.Todo) {
 		if td.Urgent {
 			kit.Pill(c, t, "紧急", t.Warning)
 		}
-		if label, overdue := countdownText(td.DueAt); label != "" {
+		if label, overdue := todoCountdown(td); label != "" {
 			col := t.TextMuted
 			if overdue {
 				col = t.Danger
@@ -202,6 +211,8 @@ func (a *App) quickAddTodo() {
 		Important: u.todoQuickImportant,
 		Urgent:    u.todoQuickUrgent,
 		Status:    TodoOpen,
+		// 快速添加默认「今天开始」：这样它立刻出现在「今天要做」与桌面便签里。
+		StartAt: startOfDay(time.Now()),
 	}
 	if !a.saveTodo(td) {
 		return

@@ -85,10 +85,12 @@ type atlasUI struct {
 	todoQuickImportant bool
 	todoQuickUrgent    bool
 	todoFilter         string // 全部 / 待办 / 进行中 / 已完成
-	todoProject        string // 全部项目 / 项目名
-	todoSearch         string
-	todoForm           todoForm
-	confirmTodo        int64
+	// todoTodayOnly 只看「今天要做」：未完成，且今天在 [开始日, 截止日] 内。
+	todoTodayOnly bool
+	todoProject   string // 全部项目 / 项目名
+	todoSearch    string
+	todoForm      todoForm
+	confirmTodo   int64
 }
 
 // repoForm 仓库编辑表单。
@@ -122,6 +124,8 @@ type todoForm struct {
 	Important bool
 	Urgent    bool
 	Status    string
+	// StartAt 计划开始日（只取日期）；新建时默认今天。
+	StartAt time.Time
 	// DueAt 是草稿里的截止时刻；DueSet=false 表示「无期限」（DueAt 可能仍
 	// 保留一个默认值，供用户重新勾选时使用，但保存时不写库）。
 	DueAt  time.Time
@@ -203,6 +207,12 @@ func (a *App) openTodoDialog(td store.Todo) {
 	if !dueSet {
 		due = defaultTodoDue()
 	}
+	// 开始时间默认今天；老数据没有 start_at，用创建日回填（只回填显示，
+	// 保存时才写入——这样不会因为打开看一眼就改动历史记录）。
+	start := todoStart(td)
+	if start.IsZero() {
+		start = time.Now()
+	}
 	a.atlasUI.todoForm = todoForm{
 		ID:        td.ID,
 		Title:     td.Title,
@@ -213,6 +223,7 @@ func (a *App) openTodoDialog(td store.Todo) {
 		Important: td.Important,
 		Urgent:    td.Urgent,
 		Status:    status,
+		StartAt:   startOfDay(start),
 		DueAt:     due,
 		DueSet:    dueSet,
 	}
@@ -861,6 +872,16 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 				f.Status = got
 			}
 		})
+		dialogRow(c, "开始日期", func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+				ui.DateInput(c, &f.StartAt).Label("开始日期")
+				if ui.Button(c, "今天").Clicked() {
+					f.StartAt = startOfDay(time.Now())
+				}
+				ui.Text(c, "默认今天；「今天要做」按 开始日 ≤ 今天 ≤ 截止日 筛选").
+					TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+			})
+		})
 		dialogRow(c, "截止时间", func() {
 			choice.Toggle(c, "设置截止时间", &f.DueSet)
 			if !f.DueSet {
@@ -908,6 +929,10 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 						due = defaultTodoDue()
 					}
 				}
+				start := startOfDay(f.StartAt)
+				if start.IsZero() {
+					start = startOfDay(time.Now())
+				}
 				td := store.Todo{
 					ID:        f.ID,
 					Title:     strings.TrimSpace(f.Title),
@@ -918,6 +943,7 @@ func (a *App) todoDialog(c *ui.Context, t *ui.Theme) {
 					Important: f.Important,
 					Urgent:    f.Urgent,
 					Status:    f.Status,
+					StartAt:   start,
 					DueAt:     due,
 				}
 				if a.saveTodo(td) {

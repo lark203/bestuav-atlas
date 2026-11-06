@@ -114,6 +114,14 @@ type Settings struct {
 	PetX int `json:"petX"`
 	PetY int `json:"petY"`
 
+	// ---- 今日便签 ----
+	// StickyEnabled 是否显示「今日便签」桌面浮窗（无边框置顶小窗，见
+	// internal/view/sticky_note.go）：按早 / 中 / 晚列出今天要做的待办。
+	StickyEnabled bool `json:"stickyEnabled"`
+	// StickyX / StickyY 便签窗口位置；负数 = 未设置（默认贴屏幕右上角）。
+	StickyX int `json:"stickyX"`
+	StickyY int `json:"stickyY"`
+
 	// MenuOpacity 侧栏（菜单区）浮层的不透明度，0.2–1.0。仅在设置了背景图时生效：
 	// 1.0=完全遮蔽背景图（与未设背景图时观感一致），数值越小背景图越透出来。
 	MenuOpacity float64 `json:"menuOpacity"`
@@ -237,6 +245,8 @@ func Default() *Settings {
 		PetReminderMinutes:     DefaultPetReminderMinutes,
 		PetX:                   -1,
 		PetY:                   -1,
+		StickyX:                -1,
+		StickyY:                -1,
 		RepoKind:               "github",
 		RepoBranch:             "main",
 	}
@@ -390,6 +400,12 @@ func normalize(s *Settings) {
 	}
 	if s.PetY < -1 {
 		s.PetY = -1
+	}
+	if s.StickyX < -1 {
+		s.StickyX = -1
+	}
+	if s.StickyY < -1 {
+		s.StickyY = -1
 	}
 	// 仓库同步：平台白名单、默认分支、去掉首尾空白（令牌尤其不能带空格）。
 	if s.RepoKind != "gitea" && s.RepoKind != "gitee" {

@@ -214,6 +214,11 @@ type App struct {
 	petPollAt      time.Time    // 上次轮询窗口位置
 	petLastPoke    time.Time    // 上次拖动/互动（60 秒不动就躺下）
 
+	// ---- 今日便签（见 sticky_note.go） ----
+	stickyWin     *mygo.Window // 便签小窗（nil = 未创建）
+	stickyApplied bool         // 已应用的开关状态
+	stickyPollAt  time.Time    // 上次记录窗口位置
+
 	// ---- 基本信息页的运行时快照 ----
 	env envSnapshot
 
@@ -494,6 +499,22 @@ func (a *App) SetWindow(w *mygo.Window) {
 	// 自动刷新不能依赖 View 的帧循环：窗口收进托盘 / 最小化后不再有帧，
 	// c.After 排的唤醒也就不会来。这里起一个独立计时器，到点直接回主线程。
 	a.startRepoAutoLoop()
+}
+
+// showMainWindow 把主窗口调出来（便签 / 托盘入口用）：托盘里隐藏的先 Show，
+// 最小化的先还原，再抢焦点。
+func (a *App) showMainWindow() {
+	if a.win == nil {
+		return
+	}
+	if !a.win.IsVisible() {
+		a.win.Show()
+	}
+	if a.win.IsMinimized() {
+		a.win.Restore()
+	}
+	a.win.Focus()
+	a.requestFrame()
 }
 
 // SetPage 设置启动页（命令行 --page / 单实例转发用）。不存在的 id 忽略。
@@ -863,6 +884,8 @@ func (a *App) View(c *ui.Context) {
 
 	// 桌宠：累积陪伴时长、久坐提醒、按开关创建/关闭小窗（见 pet.go）。
 	a.petTick(time.Now())
+	// 今日便签：按开关创建/关闭小窗，并低频记住拖动后的位置（见 sticky_note.go）。
+	a.stickyTick()
 
 	// 0) 页面生命周期：处理「进入 / 离开 / 闲置销毁」，必须在构建界面前完成，
 	//    这样 keepFresh 页面在本帧就是全新的状态（见 pagelife.go）。

@@ -177,6 +177,9 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 			// ===== 桌宠 =====
 			kit.Section(c, t, "桌宠", func() { a.petSection(c, t) })
 
+			// ===== 今日便签 =====
+			kit.Section(c, t, "今日便签", func() { a.stickySection(c, t) })
+
 		}
 
 		if shortcuts {

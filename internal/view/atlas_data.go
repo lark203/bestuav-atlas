@@ -140,6 +140,8 @@ func (a *App) atlas() *atlasCache {
 // reloadAtlas 让下一帧重读数据（写操作与批量任务结束都调它）。
 func (a *App) reloadAtlas() {
 	a.atlasCache.loaded = false
+	// 便签显示的是同一份数据：标记脏之后立刻重画，避免它比主界面慢一拍。
+	a.stickyInvalidate()
 }
 
 // ---- 名称与归属查询 ----
@@ -491,6 +493,79 @@ func countdownText(t time.Time) (string, bool) {
 		text = "逾期 " + durationText(d)
 	}
 	return text, overdue
+}
+
+// todoCountdown 待办的倒计时文案。
+//
+// 已完成的待办在**完成那一刻冻结**：再显示「逾期 3 天」会随现在一起增长，
+// 既没有意义（事已经做完了），也会让已完成的行看起来越来越糟。完成时按
+// done_at - due_at 结算一次：逾期完成的写「逾期完成 X」，按时完成的写「按时完成」。
+func todoCountdown(td store.Todo) (string, bool) {
+	if td.DueAt.IsZero() {
+		return "", false
+	}
+	if td.Status == TodoDone {
+		if td.DoneAt.IsZero() { // 历史数据没有完成时间：只说明做完了
+			return "已完成", false
+		}
+		if td.DoneAt.After(td.DueAt) {
+			return "逾期完成 " + durationText(td.DoneAt.Sub(td.DueAt)), true
+		}
+		return "按时完成", false
+	}
+	return countdownText(td.DueAt)
+}
+
+// todoStart 计划开始时刻（零值回退到创建日）：老数据没有 start_at，用创建日
+// 当作它原本的开始时间，避免「今天要做」把它们全部漏掉。
+func todoStart(td store.Todo) time.Time {
+	if !td.StartAt.IsZero() {
+		return td.StartAt
+	}
+	if !td.CreatedAt.IsZero() {
+		return td.CreatedAt
+	}
+	return time.Time{}
+}
+
+// startOfDay 取本地时区的当天 00:00。
+func startOfDay(t time.Time) time.Time {
+	l := t.Local()
+	return time.Date(l.Year(), l.Month(), l.Day(), 0, 0, 0, 0, l.Location())
+}
+
+// todoActiveToday 今天是否「该做这条」：未完成，且今天落在 [开始日, 截止日] 内
+// （无截止日 = 一直有效）。逾期（截止日已过）不算今天要做——它们该被单独处理。
+func todoActiveToday(td store.Todo, now time.Time) bool {
+	if td.Status == TodoDone {
+		return false
+	}
+	today := startOfDay(now)
+	start := todoStart(td)
+	if !start.IsZero() && startOfDay(start).After(today) {
+		return false // 还没开始
+	}
+	if !td.DueAt.IsZero() && startOfDay(td.DueAt).Before(today) {
+		return false // 已经逾期，不在"今天"里
+	}
+	return true
+}
+
+// todoBucket 桌面便签的分段：早 / 中 / 晚 / 全天。
+//
+// 按截止时刻的小时切：<12 早，12–18 中，>=18 晚；没有截止时刻的算「全天」。
+func todoBucket(td store.Todo) string {
+	if td.DueAt.IsZero() {
+		return "全天"
+	}
+	switch h := td.DueAt.Local().Hour(); {
+	case h < 12:
+		return "早"
+	case h < 18:
+		return "中"
+	default:
+		return "晚"
+	}
 }
 
 // durationText 把时长写成「3天4小时 / 5小时 / 12分钟」。

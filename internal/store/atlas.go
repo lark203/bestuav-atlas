@@ -70,7 +70,10 @@ type Todo struct {
 	Urgent    bool
 	Status    string    // 待办 / 进行中 / 已完成
 	DueAt     time.Time // 零值 = 无期限
-	DoneAt    time.Time
+	// StartAt 计划开始日（只取日期部分，零值 = 未设置）。用于「今天要做」的筛选：
+	// 开始日 ≤ 今天 ≤ 截止日 的任务才是"今天该做的"。
+	StartAt time.Time
+	DoneAt  time.Time
 	// NotifiedAt 是「这条待办的到期提醒已经发过」的时刻；零值 = 还没提醒。
 	// 改截止时间会清空它，让新时刻还能再提醒一次。
 	NotifiedAt time.Time
@@ -89,7 +92,7 @@ const (
 		status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
 		checked_at, created_at, updated_at`
 	todoColumns = `id, title, note, project_id, repo_id, priority, important, urgent,
-		status, due_at, done_at, notified_at, created_at, updated_at`
+		status, start_at, due_at, done_at, notified_at, created_at, updated_at`
 )
 
 // rowScanner 让 QueryRow 与 Rows 共用同一套扫描逻辑。
@@ -138,11 +141,13 @@ func scanRepo(r rowScanner) (Repo, error) {
 
 func scanTodo(r rowScanner) (Todo, error) {
 	var t Todo
-	var due, done, notified, created, updated string
+	var start, due, done, notified, created, updated string
 	if err := r.Scan(&t.ID, &t.Title, &t.Note, &t.ProjectID, &t.RepoID,
-		&t.Priority, &t.Important, &t.Urgent, &t.Status, &due, &done, &notified, &created, &updated); err != nil {
+		&t.Priority, &t.Important, &t.Urgent, &t.Status, &start, &due, &done, &notified,
+		&created, &updated); err != nil {
 		return Todo{}, err
 	}
+	t.StartAt = parseTime(start)
 	t.DueAt = parseTime(due)
 	t.DoneAt = parseTime(done)
 	t.NotifiedAt = parseTime(notified)
@@ -460,8 +465,8 @@ func (s *Store) TodoByID(id int64) (Todo, bool, error) {
 
 // CreateTodo 新建待办，返回自增 id；时间戳用服务端时间。
 //
-// DueAt / DoneAt / NotifiedAt 的零值写空串，分别表示「无期限」「未完成」
-// 「还没提醒」。
+// StartAt / DueAt / DoneAt / NotifiedAt 的零值写空串，分别表示「没排开始日」
+// 「无期限」「未完成」「还没提醒」。
 func (s *Store) CreateTodo(t Todo) (int64, error) {
 	if strings.TrimSpace(t.Title) == "" {
 		return 0, fmt.Errorf("store: 待办标题不能为空")
@@ -469,10 +474,10 @@ func (s *Store) CreateTodo(t Todo) (int64, error) {
 	now := nowText()
 	res, err := s.db.Exec(
 		`INSERT INTO todo(title, note, project_id, repo_id, priority, important, urgent, status,
-		                  due_at, done_at, notified_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                  start_at, due_at, done_at, notified_at, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent, t.Status,
-		timeText(t.DueAt), timeText(t.DoneAt), timeText(t.NotifiedAt), now, now)
+		timeText(t.StartAt), timeText(t.DueAt), timeText(t.DoneAt), timeText(t.NotifiedAt), now, now)
 	if err != nil {
 		return 0, fmt.Errorf("store: 写入待办失败: %w", err)
 	}
@@ -493,12 +498,12 @@ func (s *Store) UpdateTodo(t Todo) error {
 	due := timeText(t.DueAt)
 	_, err := s.db.Exec(
 		`UPDATE todo SET title = ?, note = ?, project_id = ?, repo_id = ?, priority = ?,
-		        important = ?, urgent = ?, status = ?, due_at = ?, done_at = ?,
+		        important = ?, urgent = ?, status = ?, start_at = ?, due_at = ?, done_at = ?,
 		        notified_at = CASE WHEN due_at <> ? THEN '' ELSE notified_at END,
 		        updated_at = ?
 		  WHERE id = ?`,
 		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent,
-		t.Status, due, timeText(t.DoneAt), due, nowText(), t.ID)
+		t.Status, timeText(t.StartAt), due, timeText(t.DoneAt), due, nowText(), t.ID)
 	if err != nil {
 		return fmt.Errorf("store: 更新待办失败: %w", err)
 	}

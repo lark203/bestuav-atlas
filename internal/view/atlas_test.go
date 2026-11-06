@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -387,6 +388,107 @@ func TestRepoAutoRefreshTicksWithoutFrames(t *testing.T) {
 	a.taskProgress = 0
 	a.taskLabel = ""
 	a.atlasUI.busy = false
+}
+
+// TestTodoCountdownFreezes 已完成的逾期时长冻结在完成那一刻，不再随现在增长。
+func TestTodoCountdownFreezes(t *testing.T) {
+	now := time.Now()
+	doneLate := store.Todo{
+		Status: TodoDone,
+		DueAt:  now.Add(-48 * time.Hour),
+		DoneAt: now.Add(-24 * time.Hour),
+	}
+	first, overdue := todoCountdown(doneLate)
+	if !overdue || !strings.HasPrefix(first, "逾期完成") {
+		t.Fatalf("逾期完成的文案不对：%q（overdue=%v）", first, overdue)
+	}
+	// 文案只依赖 DoneAt，隔多久再看都一样。
+	if second, _ := todoCountdown(doneLate); second != first {
+		t.Errorf("完成后的逾期时长不应变化：%q vs %q", first, second)
+	}
+
+	doneOnTime := store.Todo{
+		Status: TodoDone,
+		DueAt:  now.Add(24 * time.Hour),
+		DoneAt: now.Add(-time.Hour),
+	}
+	if label, od := todoCountdown(doneOnTime); label != "按时完成" || od {
+		t.Errorf("按时完成的文案不对：%q（overdue=%v）", label, od)
+	}
+
+	open := store.Todo{DueAt: now.Add(time.Hour)}
+	if label, od := todoCountdown(open); od || !strings.HasPrefix(label, "剩 ") {
+		t.Errorf("未完成应是倒计时：%q（overdue=%v）", label, od)
+	}
+}
+
+// TestTodoActiveToday 「今天要做」= 未完成 且 开始日 ≤ 今天 ≤ 截止日。
+func TestTodoActiveToday(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name string
+		td   store.Todo
+		want bool
+	}{
+		{"昨天开始今天截止", store.Todo{StartAt: now.AddDate(0, 0, -1), DueAt: now}, true},
+		{"今天开始无截止", store.Todo{StartAt: now}, true},
+		{"明天开始", store.Todo{StartAt: now.AddDate(0, 0, 1)}, false},
+		{"昨天已截止（逾期）", store.Todo{StartAt: now.AddDate(0, 0, -3), DueAt: now.AddDate(0, 0, -1)}, false},
+		{"已完成", store.Todo{StartAt: now.AddDate(0, 0, -1), DueAt: now, Status: TodoDone}, false},
+	}
+	for _, c := range cases {
+		if got := todoActiveToday(c.td, now); got != c.want {
+			t.Errorf("%s：got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestStickyBuckets 便签按截止时刻分早 / 中 / 晚 / 全天。
+func TestStickyBuckets(t *testing.T) {
+	day := func(h, m int) time.Time {
+		n := time.Now()
+		return time.Date(n.Year(), n.Month(), n.Day(), h, m, 0, 0, n.Location())
+	}
+	cases := map[string]struct {
+		td   store.Todo
+		want string
+	}{
+		"早":  {store.Todo{DueAt: day(9, 0)}, "早"},
+		"中":  {store.Todo{DueAt: day(13, 30)}, "中"},
+		"晚":  {store.Todo{DueAt: day(20, 0)}, "晚"},
+		"全天": {store.Todo{}, "全天"},
+	}
+	for want, c := range cases {
+		if got := todoBucket(c.td); got != want {
+			t.Errorf("bucket 应为 %s，实际 %s", want, got)
+		}
+	}
+}
+
+// TestMonthStats 月度统计：新建 / 完成 / 逾期按各自时间归月。
+func TestMonthStats(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.Local)
+	thisMonth := time.Date(2026, 11, 2, 9, 0, 0, 0, time.Local)
+	lastMonth := time.Date(2026, 10, 20, 9, 0, 0, 0, time.Local)
+	todos := []store.Todo{
+		// 本月新建、本月按时完成
+		{CreatedAt: thisMonth, DueAt: thisMonth.Add(48 * time.Hour), DoneAt: thisMonth.Add(24 * time.Hour), Status: TodoDone},
+		// 本月新建、逾期未完成
+		{CreatedAt: thisMonth, DueAt: thisMonth.Add(-24 * time.Hour), Status: TodoOpen},
+		// 上月新建并完成
+		{CreatedAt: lastMonth, DueAt: lastMonth.Add(24 * time.Hour), DoneAt: lastMonth.Add(2 * time.Hour), Status: TodoDone},
+	}
+	stats := monthStats(todos, now, 2)
+	if len(stats) != 2 {
+		t.Fatalf("应有 2 个月，实际 %d", len(stats))
+	}
+	oct, nov := stats[0], stats[1]
+	if oct.Created != 1 || oct.Done != 1 || oct.Overdue != 0 {
+		t.Errorf("10 月统计不对：%+v", oct)
+	}
+	if nov.Created != 2 || nov.Done != 1 || nov.Overdue != 1 {
+		t.Errorf("11 月统计不对：%+v", nov)
+	}
 }
 
 // TestEmptyPagesRender 空库时首页/仓库页给出引导，而不是白屏。

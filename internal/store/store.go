@@ -41,7 +41,8 @@ import (
 // 5：仓库所在平台主机
 // 6：待办到期提醒的已通知时刻（notified_at）
 // 7：任务记录补充失败原因（detail）与真实耗时（duration_ms）
-const schemaVersion = "7"
+// 8：待办新增计划开始日（start_at），支撑「今天要做」与桌面便签分时段视图
+const schemaVersion = "8"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -305,6 +306,7 @@ func (s *Store) addMissingColumns() error {
 			{"important", `important INTEGER NOT NULL DEFAULT 0`},
 			{"urgent", `urgent INTEGER NOT NULL DEFAULT 0`},
 			{"notified_at", `notified_at TEXT NOT NULL DEFAULT ''`},
+			{"start_at", `start_at TEXT NOT NULL DEFAULT ''`},
 		}},
 		{"task", []addColumn{
 			{"detail", `detail TEXT NOT NULL DEFAULT ''`},

@@ -1355,3 +1355,29 @@ func todoTitles(list []Todo) []string {
 	}
 	return out
 }
+
+// TestTodoStartAtRoundTrip 计划开始日能落库、能读回、能改。
+func TestTodoStartAtRoundTrip(t *testing.T) {
+	s := openTemp(t)
+	start := time.Date(2026, 11, 6, 0, 0, 0, 0, time.Local)
+	id, err := s.CreateTodo(Todo{Title: "写周报", Status: "待办", StartAt: start})
+	if err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+	got, ok, err := s.TodoByID(id)
+	if err != nil || !ok {
+		t.Fatalf("TodoByID: %v ok=%v", err, ok)
+	}
+	if !got.StartAt.Equal(start) {
+		t.Errorf("开始日往返不一致：want %v got %v", start, got.StartAt)
+	}
+
+	got.StartAt = start.AddDate(0, 0, 2)
+	if err := s.UpdateTodo(got); err != nil {
+		t.Fatalf("UpdateTodo: %v", err)
+	}
+	again, _, _ := s.TodoByID(id)
+	if !again.StartAt.Equal(start.AddDate(0, 0, 2)) {
+		t.Errorf("开始日未更新：%v", again.StartAt)
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"bestuav-atlas/internal/store"
 )
 
@@ -89,9 +91,35 @@ func TestScreenshots(t *testing.T) {
 		}
 	}
 
+	// 今天早 / 中 / 晚各一条待办：给总览的月度节奏与便签截图提供素材。
+	today := startOfDay(time.Now())
+	for _, it := range []struct {
+		title string
+		hour  int
+	}{{"写晨会纪要", 9}, {"过一遍仓库状态", 13}, {"整理今日复盘", 20}} {
+		if _, err := st.CreateTodo(store.Todo{
+			Title: it.title, Status: TodoOpen, StartAt: today,
+			DueAt: today.Add(time.Duration(it.hour) * time.Hour),
+		}); err != nil {
+			t.Fatalf("建今日待办失败: %v", err)
+		}
+	}
+	a.reloadAtlas()
+
 	for _, page := range []string{"home", "todos", "projects", "repos", "task", "settings"} {
 		a.page = page
 		save("atlas-" + page)
+	}
+
+	// 今日便签：独立小窗，按同样的尺寸离屏渲染。
+	if tt := ui.NewTester(a.stickyView, stickyW, stickyH); tt != nil {
+		tt.Frame()
+		if img := tt.Image(); img != nil {
+			if f, err := os.Create(filepath.Join(dir, "atlas-sticky.png")); err == nil {
+				_ = png.Encode(f, img)
+				_ = f.Close()
+			}
+		}
 	}
 
 	// 仓库详情页。
