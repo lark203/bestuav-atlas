@@ -42,6 +42,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	s.RepoAutoRefreshMinutes = 60
 	s.RepoToken = "sync-token"
 	s.GitHubToken = "workspace-token"
+	s.StickyEnabled = true
+	s.StickyAlwaysOnTop = false
+	s.StickyX, s.StickyY = 120, 240
 	if err := s.Save(); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
@@ -57,7 +60,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		got.MenuOpacity != 0.5 || got.ContentOpacity != 0.7 ||
 		got.AsyncConcurrency != 6 || !got.RepoAutoRefresh ||
 		got.RepoAutoRefreshMinutes != 60 ||
-		got.RepoToken != "sync-token" || got.GitHubToken != "workspace-token" {
+		got.RepoToken != "sync-token" || got.GitHubToken != "workspace-token" ||
+		!got.StickyEnabled || got.StickyAlwaysOnTop ||
+		got.StickyX != 120 || got.StickyY != 240 {
 		t.Fatalf("读取结果与写入不一致: %+v", got)
 	}
 }
@@ -271,5 +276,19 @@ func TestResetWithoutFileIsNoop(t *testing.T) {
 	}
 	if backup != "" {
 		t.Errorf("文件不存在时不该有备份，实际 %q", backup)
+	}
+}
+
+// TestStickyDefaults 便签默认不显示、但一旦显示默认置顶（老配置缺字段时也成立）。
+func TestStickyDefaults(t *testing.T) {
+	d := Default()
+	if d.StickyEnabled {
+		t.Error("便签默认应关闭")
+	}
+	if !d.StickyAlwaysOnTop {
+		t.Error("便签默认应置顶")
+	}
+	if d.StickyX != -1 || d.StickyY != -1 {
+		t.Errorf("便签默认位置应为未设置，实际 %d,%d", d.StickyX, d.StickyY)
 	}
 }

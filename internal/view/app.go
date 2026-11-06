@@ -217,6 +217,7 @@ type App struct {
 	// ---- 今日便签（见 sticky_note.go） ----
 	stickyWin     *mygo.Window // 便签小窗（nil = 未创建）
 	stickyApplied bool         // 已应用的开关状态
+	stickyTopTop  bool         // 已应用的「始终置顶」状态
 	stickyPollAt  time.Time    // 上次记录窗口位置
 
 	// ---- 基本信息页的运行时快照 ----

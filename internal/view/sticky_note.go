@@ -26,10 +26,23 @@ const (
 // stickyBuckets 便签分段的固定顺序；与 todoBucket 的返回值一致。
 var stickyBuckets = []string{"早", "中", "晚", "全天"}
 
-// stickyTick 主窗口每帧调用：按开关创建/销毁窗口，并低频记录位置。
+// stickyTick 主窗口每帧调用：按开关创建/销毁窗口，应用置顶设置，并低频记录位置。
 func (a *App) stickyTick() {
 	a.stickySyncWindow()
+	a.stickyApplyOnTop()
 	a.stickyRememberPos()
+}
+
+// stickyApplyOnTop 把「始终置顶」设置同步到已经打开的窗口（设置里改完立刻生效）。
+func (a *App) stickyApplyOnTop() {
+	if a.stickyWin == nil {
+		return
+	}
+	if a.stickyTopTop == a.settings.StickyAlwaysOnTop {
+		return
+	}
+	a.stickyTopTop = a.settings.StickyAlwaysOnTop
+	a.stickyWin.SetAlwaysOnTop(a.stickyTopTop)
 }
 
 // stickySyncWindow 根据开关创建/销毁便签窗口。
@@ -59,7 +72,7 @@ func (a *App) openStickyWindow() {
 		Width:             stickyW,
 		Height:            stickyH,
 		Frameless:         true,
-		AlwaysOnTop:       true,
+		AlwaysOnTop:       a.settings.StickyAlwaysOnTop,
 		SkipTaskbar:       true,
 		DisableResize:     true,
 		DisableMaximize:   true,
@@ -81,6 +94,7 @@ func (a *App) openStickyWindow() {
 		return
 	}
 	a.stickyWin = win
+	a.stickyTopTop = a.settings.StickyAlwaysOnTop
 	win.OnClosed(func() {
 		a.stickyWin = nil
 		a.stickyApplied = false
@@ -263,10 +277,25 @@ func (a *App) stickyTodoRow(c *ui.Context, t *ui.Theme, td store.Todo, now time.
 // stickySection 设置页「今日便签」区块。
 func (a *App) stickySection(c *ui.Context, t *ui.Theme) {
 	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Switch(c, &a.settings.StickyEnabled).Shrink(0)
+		sw := ui.Switch(c, &a.settings.StickyEnabled).Shrink(0)
+		if sw.Changed() {
+			a.persist()
+		}
 		ui.Column(c).Gap(2).Grow(1).Children(func() {
 			ui.Text(c, "显示今日便签").Bold()
-			ui.Text(c, "无边框置顶小窗，按早 / 中 / 晚列出今天要做的待办；拖动标题栏移动，位置会记住。").
+			ui.Text(c, "无边框小窗，按早 / 中 / 晚列出今天要做的待办；拖动标题栏移动，位置会记住。").
+				TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+		})
+	})
+
+	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		sw := ui.Switch(c, &a.settings.StickyAlwaysOnTop).Shrink(0)
+		if sw.Changed() {
+			a.persist()
+		}
+		ui.Column(c).Gap(2).Grow(1).Children(func() {
+			ui.Text(c, "始终置顶").Bold()
+			ui.Text(c, "打开时便签浮在所有窗口之上；关掉后它像普通窗口一样会被其它窗口盖住，不会一直挡住屏幕右上角。设置改动立刻生效。").
 				TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 		})
 	})

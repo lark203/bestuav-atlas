@@ -115,9 +115,12 @@ type Settings struct {
 	PetY int `json:"petY"`
 
 	// ---- 今日便签 ----
-	// StickyEnabled 是否显示「今日便签」桌面浮窗（无边框置顶小窗，见
+	// StickyEnabled 是否显示「今日便签」桌面浮窗（无边框小窗，见
 	// internal/view/sticky_note.go）：按早 / 中 / 晚列出今天要做的待办。
 	StickyEnabled bool `json:"stickyEnabled"`
+	// StickyAlwaysOnTop 便签是否始终置顶。默认 true；关掉后它像普通窗口一样
+	// 会被其它窗口盖住，不会永远挡住屏幕右上角。
+	StickyAlwaysOnTop bool `json:"stickyAlwaysOnTop"`
 	// StickyX / StickyY 便签窗口位置；负数 = 未设置（默认贴屏幕右上角）。
 	StickyX int `json:"stickyX"`
 	StickyY int `json:"stickyY"`
@@ -247,6 +250,7 @@ func Default() *Settings {
 		PetY:                   -1,
 		StickyX:                -1,
 		StickyY:                -1,
+		StickyAlwaysOnTop:      true,
 		RepoKind:               "github",
 		RepoBranch:             "main",
 	}
