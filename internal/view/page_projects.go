@@ -96,6 +96,10 @@ func (a *App) projectCard(c *ui.Context, t *ui.Theme, p store.Project) {
 				a.atlasUI.todoProject = p.Name
 				a.page = "todos"
 			}
+			// 每个项目自己的拓扑图：项目居中、左连它的待办、右连它的仓库。
+			if ui.Button(c, "拓扑图").Clicked() {
+				a.openProjectGraph(p.ID)
+			}
 		})
 	})
 }

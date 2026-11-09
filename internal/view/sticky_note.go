@@ -419,7 +419,7 @@ func (a *App) stickySection(c *ui.Context, t *ui.Theme) {
 		}
 		ui.Column(c).Gap(2).Grow(1).Children(func() {
 			ui.Text(c, "显示今日便签").Bold()
-			ui.Text(c, "无边框小窗，按早 / 中 / 晚列出今天要做的待办；拖动标题栏移动，位置会记住。").
+			ui.Text(c, "无边框小窗，按早 / 中 / 晚列出今天要做的待办；拖动标题栏移动、拖右下角缩放，位置与尺寸都会记住。").
 				TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 		})
 	})
@@ -446,7 +446,7 @@ func (a *App) stickySection(c *ui.Context, t *ui.Theme) {
 				a.stickyWin.SetPosition(x, y)
 			}
 		}
-		ui.Text(c, fmt.Sprintf("当前尺寸 %d × %d", stickyW, stickyH)).
+		ui.Text(c, fmt.Sprintf("当前尺寸 %d × %d（拖动便签右下角可缩放，尺寸会自动记住）", a.stickySizeW, a.stickySizeH)).
 			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 	})
 }

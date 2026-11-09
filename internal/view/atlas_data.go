@@ -191,6 +191,42 @@ func (d *atlasCache) openTodoCountOf(projectID int64) int {
 	return n
 }
 
+// projectRepos 某项目下的仓库（按名称排序，供拓扑图使用）。
+func (d *atlasCache) projectRepos(projectID int64) []store.Repo {
+	var out []store.Repo
+	for _, r := range d.repos {
+		if r.ProjectID == projectID {
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// projectTodos 某项目关联的待办：直接归属该项目的，或归属该项目下某个仓库的。
+// 未完成的排在前面，再按标题排序（拓扑图里从上往下读）。
+func (d *atlasCache) projectTodos(projectID int64) []store.Todo {
+	repoOf := make(map[int64]bool, len(d.repos))
+	for _, r := range d.repos {
+		if r.ProjectID == projectID {
+			repoOf[r.ID] = true
+		}
+	}
+	var out []store.Todo
+	for _, td := range d.todos {
+		if td.ProjectID == projectID || (td.RepoID != 0 && repoOf[td.RepoID]) {
+			out = append(out, td)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if (out[i].Status == TodoDone) != (out[j].Status == TodoDone) {
+			return out[i].Status != TodoDone
+		}
+		return out[i].Title < out[j].Title
+	})
+	return out
+}
+
 // projectOptions 下拉框选项：第一项固定为「未归属」。
 func (d *atlasCache) projectOptions() []string {
 	out := make([]string, 0, len(d.projects)+1)
