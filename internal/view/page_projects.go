@@ -26,6 +26,11 @@ func (a *App) projectPage(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "项目是仓库与待办的归属单位").
 					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 			})
+			// 「关系图谱」放正文按钮，带文字标签——比页头那个纯图标好找得多。
+			// 页头仍保留同名图标按钮（快捷入口），两处都指向同一个弹窗。
+			if ui.Button(c, "关系图谱").Clicked() {
+				a.openGraphDialog()
+			}
 			if ui.PrimaryButton(c, "新建项目").Clicked() {
 				a.openProjectDialog(store.Project{})
 			}

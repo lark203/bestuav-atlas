@@ -238,14 +238,15 @@ func (a *App) stickyView(c *ui.Context) {
 	}
 	root.Children(func() {
 		if a.stickyMini {
-			// 折叠态只展示待办总数（一个数字），不画图标 / 文案，
-			// 64×64 的小方块里才放得下、也不显得挤。悬浮提示带上数量。
+			// 折叠态：显示「数字 + 待办」两行（不画图标，避免 64×64 里挤）。
 			mini := ui.Box(c).Fill().Cursor(ui.CursorPointer).
 				Tooltip("点击展开便签（" + itoa(total) + " 条待办）").
 				Background(t.Surface).Children(func() {
-				ui.Row(c).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
-					ui.Text(c, itoa(total)).Bold().FontSize(24)
-				})
+				ui.Column(c).Fill().Gap(0).AlignItems(ui.Center).Justify(ui.Center).
+					Children(func() {
+						ui.Text(c, itoa(total)).Bold().FontSize(22)
+						ui.Text(c, "待办").FontSize(t.FontSize - 3).TextColor(t.TextMuted)
+					})
 			})
 			if mini.Clicked() {
 				a.stickyMini = false
@@ -269,12 +270,18 @@ func (a *App) stickyView(c *ui.Context) {
 					ui.Text(c, "").Grow(1)
 					ui.Text(c, itoa(total)+" 条").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 					// 图钉放到标题栏最后：快捷切换始终置顶，不必进设置页。
-					// 钉住态用强调色高亮；靠行 AlignItems(Center) 与其它元素垂直居中对齐。
+					// 钉住态用强调色高亮；提示语随状态变（未钉=置顶，已钉=取消）。
+					// 用 Row + 居中（不是裸 Box）：图标才会在 22×22 点击区里正中，
+					// 进而与同一行里 AlignItems(Center) 的文字垂直居中对齐。
+					pinned := a.settings.StickyAlwaysOnTop
 					pinCol := t.TextMuted
-					if a.settings.StickyAlwaysOnTop {
+					pinTip := "置顶"
+					if pinned {
 						pinCol = t.Accent
+						pinTip = "取消"
 					}
-					pin := ui.Box(c).Size(22, 22).Cursor(ui.CursorPointer).Tooltip("切换始终置顶").
+					pin := ui.Row(c).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).
+						Width(22).Height(22).Cursor(ui.CursorPointer).Tooltip(pinTip).
 						Children(func() { ui.Icon(c, icons.Pin).FontSize(14).TextColor(pinCol) })
 					if pin.Clicked() {
 						a.stickyToggleTop()
