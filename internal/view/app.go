@@ -923,18 +923,21 @@ func (a *App) View(c *ui.Context) {
 		a.appliedThemeIdx = a.themeIdx
 		a.settings.Theme = themeName(a.themeIdx)
 		a.persist()
+		a.stickyInvalidate() // 便签独立窗口：明暗切换后立即重画
 	}
 	// 1.5) 配色方案：只存偏好，颜色在下面每帧应用（applyPalette 绝对赋值，幂等）。
 	if a.paletteIdx != a.appliedPaletteIdx {
 		a.settings.Palette = paletteName(a.paletteIdx)
 		a.appliedPaletteIdx = a.paletteIdx
 		a.persist()
+		a.stickyInvalidate() // 便签跟随配色：立即重画
 	}
 	// 1.6) 背景色调：同上，只存偏好；颜色在 backdrop 之前应用。
 	if a.toneIdx != a.appliedToneIdx {
 		a.settings.Tone = toneName(a.toneIdx)
 		a.appliedToneIdx = a.toneIdx
 		a.persist()
+		a.stickyInvalidate() // 便签跟随色调：立即重画
 	}
 	// 2) 关闭行为：变化时持久化（关闭时实时读取 settings.CloseMode）。
 	if a.closeModeIdx != a.appliedCloseModeIdx {
@@ -948,6 +951,7 @@ func (a *App) View(c *ui.Context) {
 		a.settings.FontSize = rounded
 		a.appliedFontPx = rounded
 		a.persist()
+		a.stickyInvalidate() // 便签跟随字号：立即重画
 	}
 	// 4) 每帧应用字号（绝对赋值，幂等；确保各页面一致缩放）。
 	if a.settings.FontSize > 0 {

@@ -215,6 +215,17 @@ func (a *App) stickyView(c *ui.Context) {
 	t := c.Theme()
 	a.stickyRememberPos()
 
+	// 便签是**独立窗口**：它有自己的 engine 主题（每帧重置成明/暗默认），主窗口
+	// 每帧对 t 做的「字号 / 色调 / 配色」修改不会自动传到这个窗口——明/暗由全局
+	// Theme.SetSource 覆盖，但配色与色调、字号只在主窗口那份 theme 上生效。
+	// 这里在便签自己的 t 上再补一遍（绝对赋值，幂等），便签就会跟随设置里的
+	// 主题（明暗）、配色（强调色）、色调（背景/控件面）与字号。
+	if a.settings.FontSize > 0 {
+		t.FontSize = float32(a.settings.FontSize)
+	}
+	applyTone(t, toneName(a.toneIdx))
+	applyPalette(t, paletteName(a.paletteIdx))
+
 	groups := a.stickyToday(now)
 	total := 0
 	for _, items := range groups {
