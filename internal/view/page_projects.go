@@ -60,7 +60,7 @@ func (a *App) projectCard(c *ui.Context, t *ui.Theme, p store.Project) {
 	todos := d.openTodoCountOf(p.ID)
 
 	kit.Card(c, t, func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, p.Name).FontSize(16).Bold().SingleLine().Grow(1)
 			a.projectStatusMenu(c, t, p)
 		})
@@ -85,19 +85,24 @@ func (a *App) projectCard(c *ui.Context, t *ui.Theme, p store.Project) {
 				TextColor(t.TextMuted).SingleLine()
 		}
 
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "编辑").Clicked() {
+		// 四个操作按钮：用紧凑按钮 + Wrap。
+		//
+		// 卡片宽度由 RowGrid 的列宽决定，窄窗口三列时内容宽只有 240 出头，四个默认
+		// 按钮会顶出卡片右边缘（UI 里 Row 默认不裁剪）。紧凑按钮（内边距 2/8）加上
+		// Wrap 后：放得下就一行，放不下自动换行，永远不会越界。
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
+			if smallButton(c, "编辑").Clicked() {
 				a.openProjectDialog(p)
 			}
-			if ui.Button(c, "加仓库").Clicked() {
+			if smallButton(c, "加仓库").Clicked() {
 				a.openImportDialogWithProject(p)
 			}
-			if ui.Button(c, "看待办").Clicked() {
+			if smallButton(c, "看待办").Clicked() {
 				a.atlasUI.todoProject = p.Name
 				a.page = "todos"
 			}
 			// 每个项目自己的拓扑图：项目居中、左连它的待办、右连它的仓库。
-			if ui.Button(c, "拓扑图").Clicked() {
+			if smallButton(c, "拓扑图").Clicked() {
 				a.openProjectGraph(p.ID)
 			}
 		})
