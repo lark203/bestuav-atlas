@@ -124,6 +124,10 @@ type Settings struct {
 	// StickyX / StickyY 便签窗口位置；负数 = 未设置（默认贴屏幕右上角）。
 	StickyX int `json:"stickyX"`
 	StickyY int `json:"stickyY"`
+	// StickyW / StickyH 便签窗口尺寸；0 = 未设置（用内置默认 300×440）。
+	// 右下角缩放手柄拖动后写入这里并落盘，下次启动保持调整过的大小。
+	StickyW int `json:"stickyW"`
+	StickyH int `json:"stickyH"`
 
 	// MenuOpacity 侧栏（菜单区）浮层的不透明度，0.2–1.0。仅在设置了背景图时生效：
 	// 1.0=完全遮蔽背景图（与未设背景图时观感一致），数值越小背景图越透出来。
@@ -410,6 +414,15 @@ func normalize(s *Settings) {
 	}
 	if s.StickyY < -1 {
 		s.StickyY = -1
+	}
+	// 便签尺寸：0 = 走默认；正数不得小于最小可交互尺寸（与前端常量对齐），
+	// 否则折叠/缩放下限之外的值会让便签小到放不下一行字。
+	const minStickyW, minStickyH = 220, 160
+	if s.StickyW != 0 && s.StickyW < minStickyW {
+		s.StickyW = minStickyW
+	}
+	if s.StickyH != 0 && s.StickyH < minStickyH {
+		s.StickyH = minStickyH
 	}
 	// 仓库同步：平台白名单、默认分支、去掉首尾空白（令牌尤其不能带空格）。
 	if s.RepoKind != "gitea" && s.RepoKind != "gitee" {

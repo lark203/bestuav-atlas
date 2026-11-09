@@ -66,7 +66,10 @@ var (
 
 	// 关系图谱（节点 + 连线）：项目页「关系图谱」按钮，三个节点用两道连线表达
 	// 项目→仓库→待办的归属关系（见 graphDialog）。
-	Share2 = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="19" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8.59 13.51 15.42 17.49M15.41 6.51 8.59 10.49"/></svg>`))
+	// Share2 关系图谱：仓库居中、左连项目、右连待办。用纯 path 绘制（节点=实心方块、
+	// 连线=描边直线），避免 <circle> 在某些 SVG 光栅化路径下只画 fill 不画 stroke 而
+	// 导致图标几乎不可见（与 Package/Checklist 等现有图标保持一致、确保能渲染）。
+	Share2 = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M4 4h4v4H4z M16 4h4v4h-4z M10 16h4v4h-4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6 8 12 16 M18 8 12 16"/></svg>`))
 
 	// 投入滑块（两档滑轨 + 一个拇指）图标。
 	Sliders = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="16" r="2.2" fill="none" stroke="currentColor" stroke-width="2"/></svg>`))

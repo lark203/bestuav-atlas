@@ -376,9 +376,16 @@ func newApp(s *settings.Settings) *App {
 	a.petSavedXP = s.PetXP
 	a.petStage = pet.Stage(s.PetXP)
 	a.petLastBreak = time.Now()
-	// 便签初始尺寸（resize 手柄会改写；折叠小方块时临时替换）。
+	// 便签初始尺寸：优先用设置里持久化的值（缩放手柄改过并落盘），
+	// 否则回退到内置默认 300×440；折叠小方块时临时替换为 stickyMiniSize。
 	a.stickySizeW = stickyW
 	a.stickySizeH = stickyH
+	if s.StickyW >= stickyMinW {
+		a.stickySizeW = s.StickyW
+	}
+	if s.StickyH >= stickyMinH {
+		a.stickySizeH = s.StickyH
+	}
 	a.closeModeIdx = closeModeIdxOf(s.CloseMode)
 	a.appliedCloseModeIdx = a.closeModeIdx
 	a.appliedFontPx = math.Round(s.FontSize)

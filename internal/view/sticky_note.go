@@ -238,12 +238,13 @@ func (a *App) stickyView(c *ui.Context) {
 	}
 	root.Children(func() {
 		if a.stickyMini {
-			mini := ui.Box(c).Fill().Cursor(ui.CursorPointer).Tooltip("点击展开便签").
+			// 折叠态只展示待办总数（一个数字），不画图标 / 文案，
+			// 64×64 的小方块里才放得下、也不显得挤。悬浮提示带上数量。
+			mini := ui.Box(c).Fill().Cursor(ui.CursorPointer).
+				Tooltip("点击展开便签（" + itoa(total) + " 条待办）").
 				Background(t.Surface).Children(func() {
-				ui.Column(c).Gap(2).AlignItems(ui.Center).Children(func() {
-					ui.Icon(c, icons.Checklist).FontSize(18).TextColor(t.TextMuted)
-					ui.Text(c, itoa(total)).Bold().FontSize(22)
-					ui.Text(c, "待办").FontSize(t.FontSize - 3).TextColor(t.TextMuted)
+				ui.Row(c).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
+					ui.Text(c, itoa(total)).Bold().FontSize(24)
 				})
 			})
 			if mini.Clicked() {
@@ -266,7 +267,9 @@ func (a *App) stickyView(c *ui.Context) {
 					ui.Text(c, now.Format("01-02")+" "+weekdayCN(now)).
 						FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 					ui.Text(c, "").Grow(1)
-					// 图钉：快捷切换始终置顶，不必进设置页。钉住态用强调色高亮。
+					ui.Text(c, itoa(total)+" 条").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+					// 图钉放到标题栏最后：快捷切换始终置顶，不必进设置页。
+					// 钉住态用强调色高亮；靠行 AlignItems(Center) 与其它元素垂直居中对齐。
 					pinCol := t.TextMuted
 					if a.settings.StickyAlwaysOnTop {
 						pinCol = t.Accent
@@ -277,7 +280,6 @@ func (a *App) stickyView(c *ui.Context) {
 						a.stickyToggleTop()
 						a.stickyLastInteract = now
 					}
-					ui.Text(c, itoa(total)+" 条").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 				})
 
 			ui.Column(c).Gap(10).Padding(12, 10).Grow(1).Children(func() {
@@ -326,6 +328,10 @@ func (a *App) stickyView(c *ui.Context) {
 			}
 			a.stickySizeW, a.stickySizeH = nw, nh
 			a.stickyWin.SetSize(nw, nh)
+			// 落盘：缩放手柄每帧位移都重置保存计时器，松手后延迟写一次，
+			// 下次启动保持调整过的大小（见 settings.StickyW/H 与 newApp 读取）。
+			a.settings.StickyW, a.settings.StickyH = nw, nh
+			a.persist()
 			a.stickyLastInteract = now
 		}
 		handle.Draw(func(p *ui.Painter, r ui.Rect) {
