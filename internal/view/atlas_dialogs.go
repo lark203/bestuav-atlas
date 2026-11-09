@@ -171,18 +171,16 @@ func (a *App) openImportDialog() {
 	}
 }
 
-// openGraphDialog 打开「关系图谱」全量总览：仓库居中、左连项目、右连待办。
+// openGraphDialog 进入「关系图谱」整页：全部项目 / 仓库 / 待办的总览。
 func (a *App) openGraphDialog() {
 	a.atlasUI.graphProject = 0
-	a.atlasUI.dialog = "graph"
-	a.atlasUI.dialogPage = a.page
+	a.page = "topology"
 }
 
-// openProjectGraph 打开某个项目的「拓扑图」：项目居中，左连它的待办、右连它的仓库。
+// openProjectGraph 进入某个项目的「拓扑图」整页：项目在正中、仓库/待办围绕它发散。
 func (a *App) openProjectGraph(projectID int64) {
 	a.atlasUI.graphProject = projectID
-	a.atlasUI.dialog = "graph"
-	a.atlasUI.dialogPage = a.page
+	a.page = "topology"
 }
 
 // openRepoDialog 打开仓库编辑；r.ID 为 0 时是新建。
@@ -304,8 +302,6 @@ func (a *App) atlasDialogs(c *ui.Context, t *ui.Theme) {
 		a.commitDialog(c, t)
 	case "erase":
 		a.eraseDialog(c, t)
-	case "graph":
-		a.graphDialog(c, t)
 	}
 }
 
@@ -584,78 +580,57 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 	})
 }
 
-// graphDialog 关系图谱弹窗：用 Painter 在一块画布上画「项目 → 仓库 → 待办」的关系。
+// topologyPage 关系拓扑图，整页大画布（仿「仓库详情」：从别处进入、页头带返回键）。
 //
-// 仓库居中，向左的线归到所属项目（同一项目下多个仓库共用一条汇聚线），
-// 向右的线连到关联待办（按仓库聚拢，避免压成一团）。画布高度随数据量增长，
-// 弹窗外壳已包了滚动，内容多时中间区域可滚动查看。
-func (a *App) graphDialog(c *ui.Context, t *ui.Theme) {
+// 两种作用域：
+//   - 从某个项目卡的「拓扑图」进入（graphProject>0）：项目在正中，仓库/待办围绕它发散；
+//   - 从「关系图谱」进入（graphProject==0）：全部项目内圈、仓库中圈、待办外圈。
+//
+// 用整页而不是弹窗：拓扑节点多时需要足够画布，弹窗太小铺不开。
+func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 	d := a.atlas()
-	// 项目作用域的拓扑图：从项目卡上的「拓扑图」按钮进入，只看这一个项目。
-	if pid := a.atlasUI.graphProject; pid != 0 {
-		a.projectTopologyDialog(c, t, d, pid)
-		return
-	}
-	a.atlasModal(c, t, "关系图谱", func() {
-		dialogDesc(c, t, "每个圆点是一个项目 / 仓库 / 待办；仓库连到所属项目，待办连到所属仓库（没有仓库时连到项目）。")
+	pid := a.atlasUI.graphProject
 
-		if len(d.repos) == 0 && len(d.projects) == 0 && len(d.todos) == 0 {
-			ui.Text(c, "还没有任何项目 / 仓库 / 待办，先去录入一些数据再来看关系图。").
-				TextColor(t.TextMuted)
-			return
-		}
-
-		// 力导向图需要一块偏方形的画布：节点越多给得越高，设上下限。
-		// 同心环布局由画布宽度决定半径，高度取偏方形（约 460）即可，过高只是留白。
-		graphH := 460
-
-		ui.Row(c).Fill().Children(func() {
-			ui.Box(c).Grow(1).Height(float32(graphH)).Children(func() {
-				ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Draw(func(p *ui.Painter, r ui.Rect) {
-					a.drawAtlasGraph(p, r, t, d)
-				})
-			})
-		})
-	}, func() {
-		dialogButtons(c, func() {
-			if ui.Button(c, "关闭").Clicked() {
-				a.closeAtlasDialog()
+	ui.Column(c).Gap(kit.PageGap).Children(func() {
+		// ---- 标题行（返回键由页头 pageLeading 统一画）----
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+			if pid != 0 {
+				ui.Text(c, d.projectName(pid)).FontSize(22).Bold().SingleLine()
+				ui.Text(c, "中心是本项目，周围是它的仓库与待办").
+					FontSize(t.FontSize-2).TextColor(t.TextMuted)
+			} else {
+				ui.Text(c, "关系图谱").FontSize(22).Bold().SingleLine()
+				ui.Text(c, "每个圆点是一个项目 / 仓库 / 待办；连线表示归属").
+					FontSize(t.FontSize-2).TextColor(t.TextMuted)
 			}
 		})
-	})
-}
 
-// projectTopologyDialog 单个项目的「拓扑图」：项目居中，左连待办、右连仓库，
-// 一眼看清「这个项目有哪些待办、哪些仓库」。从项目卡上的按钮进入。
-func (a *App) projectTopologyDialog(c *ui.Context, t *ui.Theme, d *atlasCache, pid int64) {
-	name := d.projectName(pid)
-	repos := d.projectRepos(pid)
-	todos := d.projectTodos(pid)
-	a.atlasModal(c, t, "拓扑图 · "+name, func() {
-		dialogDesc(c, t, "中心是本项目，周围散开它的仓库与待办；连线表示归属关系。")
-		if len(repos) == 0 && len(todos) == 0 {
+		if pid == 0 {
+			if len(d.projects) == 0 && len(d.repos) == 0 && len(d.todos) == 0 {
+				ui.Text(c, "还没有任何项目 / 仓库 / 待办，先去录入一些数据再来看关系图。").
+					TextColor(t.TextMuted)
+				return
+			}
+		} else if len(d.projectRepos(pid)) == 0 && len(d.projectTodos(pid)) == 0 {
 			ui.Text(c, "这个项目下面还没有仓库或待办。").
 				TextColor(t.TextMuted)
 			return
 		}
-		// 力导向图需要偏方形的画布：节点越多给得越高，设上下限。
-		count := 1 + len(repos) + len(todos)
-		graphH := 400 + count*16
-		if graphH > 760 {
-			graphH = 760
+
+		// 画布尽量占满可视区——整页就是要能把拓扑铺开。
+		_, winH := c.Size()
+		graphH := winH - 190
+		if graphH < 360 {
+			graphH = 360
 		}
-		ui.Row(c).Fill().Children(func() {
-			ui.Box(c).Grow(1).Height(float32(graphH)).Children(func() {
-				ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Draw(func(p *ui.Painter, r ui.Rect) {
-					a.drawProjectTopology(p, r, t, name, repos, todos)
-				})
+		ui.Box(c).Height(float32(graphH)).Children(func() {
+			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Draw(func(p *ui.Painter, r ui.Rect) {
+				if pid != 0 {
+					a.drawProjectTopology(p, r, t, d.projectName(pid), d.projectRepos(pid), d.projectTodos(pid))
+				} else {
+					a.drawAtlasGraph(p, r, t, d)
+				}
 			})
-		})
-	}, func() {
-		dialogButtons(c, func() {
-			if ui.Button(c, "关闭").Clicked() {
-				a.closeAtlasDialog()
-			}
 		})
 	})
 }
@@ -844,31 +819,72 @@ func forceLayout(nodes []graphNode, edges [][2]int, w, h, pad float32) {
 	}
 }
 
-// ringLayout 确定性同心环布局：按 tier 分圈（项目内圈 / 仓库中圈 / 待办外圈），
-// 每层内按下标等分角度、从正上方开始。节点多也不会挤成一行，是稳定可读的
-// 放射状拓扑。只有单个项目时把它放正中心（当作中枢）。
+// radialCenterLayout 以 nodes[0] 为中心、其余节点在椭圆环上均分角度的放射布局：
+// 项目在正中，仓库与待办围绕它「发散」。椭圆横/纵半径按画布比例取，宽页面也能铺开。
+// 叶子较多时用内外两圈交替，避免一个圈挤太多、标签打架。
+func radialCenterLayout(nodes []graphNode, w, h float32) {
+	if len(nodes) == 0 {
+		return
+	}
+	cx, cy := w/2, h/2
+	nodes[0].x, nodes[0].y = cx, cy
+	leaves := len(nodes) - 1
+	if leaves <= 0 {
+		return
+	}
+	rx := w/2 - 120
+	ry := h/2 - 70
+	if rx < 140 {
+		rx = 140
+	}
+	if ry < 110 {
+		ry = 110
+	}
+	twoRings := leaves > 16
+	for i := 1; i < len(nodes); i++ {
+		j := i - 1
+		ang := 2*math.Pi*float64(j)/float64(leaves) - math.Pi/2 // 从正上方起
+		fx, fy := rx, ry
+		if twoRings {
+			if j%2 == 0 {
+				fx *= 0.56
+				fy *= 0.56
+			} else {
+				fx *= 0.98
+				fy *= 0.98
+			}
+		}
+		nodes[i].x = cx + fx*float32(math.Cos(ang))
+		nodes[i].y = cy + fy*float32(math.Sin(ang))
+	}
+	clampNodesToCanvas(nodes, w, h)
+}
+
+// ringLayout 确定性同心环布局（全量关系图用）：按 tier 分圈（项目内圈 / 仓库中圈 /
+// 待办外圈），每层内按下标等分角度、从正上方开始。用椭圆（横纵半径分开）铺满宽画布。
+// 只有单个项目时把它放正中心。
 func ringLayout(nodes []graphNode, w, h, pad float32) {
 	cx, cy := w/2, h/2
-	short := w
-	if h < short {
-		short = h
+	rx := w/2 - 120
+	ry := h/2 - 80
+	if rx < 140 {
+		rx = 140
 	}
-	maxR := short/2 - 44
-	if maxR < 40 {
-		maxR = 40
+	if ry < 110 {
+		ry = 110
 	}
 	counts := map[int]int{}
 	for _, nd := range nodes {
 		counts[nd.tier]++
 	}
-	radiusOf := func(tier int) float32 {
+	fracOf := func(tier int) float32 {
 		switch tier {
 		case 0:
-			return maxR * 0.30
+			return 0.30
 		case 1:
-			return maxR * 0.66
+			return 0.66
 		default:
-			return maxR * 0.98
+			return 0.98
 		}
 	}
 	seen := map[int]int{}
@@ -877,17 +893,21 @@ func ringLayout(nodes []graphNode, w, h, pad float32) {
 		k := counts[t]
 		j := seen[t]
 		seen[t]++
-		r := radiusOf(t)
 		if t == 0 && k == 1 {
-			// 单个项目：放正中心
 			nodes[i].x, nodes[i].y = cx, cy
 			continue
 		}
-		ang := 2*math.Pi*float64(j)/float64(k) - math.Pi/2 // 从正上方起
-		nodes[i].x = cx + r*float32(math.Cos(ang))
-		nodes[i].y = cy + r*float32(math.Sin(ang))
+		f := fracOf(t)
+		ang := 2*math.Pi*float64(j)/float64(k) - math.Pi/2
+		nodes[i].x = cx + rx*f*float32(math.Cos(ang))
+		nodes[i].y = cy + ry*f*float32(math.Sin(ang))
 	}
-	// 夹在画布内，留出标签空间
+	clampNodesToCanvas(nodes, w, h)
+}
+
+// clampNodesToCanvas 把节点夹在画布内：左右留「半个标签宽」余量、下方留标签高度，
+// 避免标签被画布边缘裁掉。
+func clampNodesToCanvas(nodes []graphNode, w, h float32) {
 	clampf := func(v, lo, hi float32) float32 {
 		if hi < lo {
 			lo, hi = hi, lo
@@ -900,7 +920,7 @@ func ringLayout(nodes []graphNode, w, h, pad float32) {
 		}
 		return v
 	}
-	xm := w*0.15
+	xm := w * 0.15
 	if xm < 48 {
 		xm = 48
 	}
@@ -917,9 +937,9 @@ func ringLayout(nodes []graphNode, w, h, pad float32) {
 }
 
 // drawNodeGraph 用 Obsidian 风格画节点图：细线 + 小圆点 + 点下方居中标签。
-// ring=true 用同心环布局（项目内圈 / 仓库中圈 / 待办外圈，按下标等分角度）——
-// 适合节点多的「全量关系图」，不会像力导向那样把同层节点挤成一行；ring=false 用
-// 力导向布局，适合「一个中心 + 一圈叶子」的项目拓扑，更有机自然。
+// ring=true 用同心环布局（项目内圈 / 仓库中圈 / 待办外圈，按下标等分角度），
+// 适合节点多的「全量关系图」；ring=false 用放射布局（nodes[0] 居中、其余围绕它
+// 发散），适合「项目在正中、仓库/待办围着它」的项目拓扑。
 func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graphNode, edges [][2]int, ring bool) {
 	if len(nodes) == 0 {
 		return
@@ -930,7 +950,8 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 	if ring {
 		ringLayout(nodes, r.W, r.H, pad)
 	} else {
-		forceLayout(nodes, edges, r.W, r.H, pad)
+		// 项目拓扑：nodes[0] 是项目，摆正中；其余节点在椭圆环上均分角度围绕它发散。
+		radialCenterLayout(nodes, r.W, r.H)
 	}
 
 	// 连线（先画，压在圆点下面）

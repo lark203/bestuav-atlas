@@ -83,6 +83,10 @@ func navRegistry() []navGroup {
 			// 自动出现返回键，回到仓库列表。
 			{id: "repo-detail", label: "仓库详情", icon: icons.Code, build: (*App).repoDetailPage,
 				hidden: true, back: "repos", policy: pagePolicy{keep: keepCached}},
+			// 拓扑图：整页大画布（仿仓库详情），从项目卡「拓扑图」或「关系图谱」进入；
+			// 不出现在侧栏，返回键回到项目页。
+			{id: "topology", label: "拓扑图", icon: icons.Share2, build: (*App).topologyPage,
+				hidden: true, back: "projects", policy: pagePolicy{keep: keepCached}},
 			{id: "todos", label: "待办", icon: icons.Checklist, build: (*App).todoPage,
 				policy: pagePolicy{keep: keepCached},
 				tools: []toolAction{
