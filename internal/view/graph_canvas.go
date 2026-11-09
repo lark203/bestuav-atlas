@@ -2,13 +2,12 @@ package view
 
 import (
 	"math"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 )
 
-// 拓扑画布的视口状态：缩放 / 平移 / 悬停 / 聚焦 / 脉冲。
+// 拓扑画布的视口状态：缩放 / 平移 / 悬停 / 悬停脉冲。
 //
 // 坐标分两层：
 //   - 世界坐标：布局函数算出来的节点位置（画布大小的局部坐标）；
@@ -33,13 +32,10 @@ type graphView struct {
 
 	// hits 是最近一帧的节点命中表（画布屏幕坐标），输入命中测试用它。
 	hits []graphHit
-	// visible 最近一帧经过筛选后可见的节点数（页面上给「没有匹配」提示用）。
-	visible int
 
-	w, h float32 // 最近一帧画布尺寸（缩放按钮 / 聚焦换算用）
+	w, h float32 // 最近一帧画布尺寸（缩放按钮用）
 
-	focus graphFocus // 双击节点后的镜头推进
-	pulse graphPulse // 双击节点后沿连线扩散的脉冲
+	pulse graphPulse // 悬停节点后沿连线逐跳扩散的脉冲
 }
 
 // graphKind 节点代表的实体类型：点击时据此跳转。
@@ -52,6 +48,13 @@ const (
 	gkTodo
 	gkUnassigned // 「未归属」虚拟中枢
 )
+
+// graphKey 节点身份：筛选/重排/重新布局后下标会变，脉冲用身份定位节点。
+type graphKey struct {
+	kind  graphKind
+	id    int64
+	label string
+}
 
 // graphHit 一个可点击节点的命中信息（画布屏幕坐标）。
 type graphHit struct {
@@ -66,37 +69,28 @@ const (
 	graphZoomMax     = 4.0
 	graphWheelFactor = 0.0022 // 滚轮每像素的缩放指数
 
-	graphClickSlop = 4                       // 按下后移动超过这个距离就算拖动
-	graphFocusZoom = 1.9                     // 双击聚焦后的缩放
-	graphFocusDur  = 320 * time.Millisecond  // 镜头推进时长
-	graphPulseDur  = 1100 * time.Millisecond // 一轮脉冲时长
+	graphClickSlop = 4 // 按下后移动超过这个距离就算拖动
+
+	// 脉冲节奏：每一跳的间隔、沿一条边跑完的时长、节点亮起后的淡出时长。
+	pulseHop    = 260 * time.Millisecond
+	pulseTravel = 320 * time.Millisecond
+	pulseFade   = 460 * time.Millisecond
 )
 
-// graphFocus 双击节点后的镜头推进：从当前 zoom/pan 平滑过渡到「节点居中」。
-type graphFocus struct {
-	active                       bool
-	start                        time.Time
-	fromZoom, fromPanX, fromPanY float32
-	toZoom, toPanX, toPanY       float32
-}
-
-// graphPulse 双击节点后的脉冲：沿该节点的每条连线，从中心向外跑一个亮点。
+// graphPulse 从悬停节点出发、按 BFS 层级向外扩散的脉冲。
+//
+// 为什么用 BFS：需求是「脉冲触达邻居时邻居亮一下，再继续跳二跳」。所以每个节点
+// 有一个到中心的最短跳数；第 d 跳的边在 [ (d-1)*hop, (d-1)*hop+travel ] 内跑亮点，
+// 节点在边跑完后亮起并淡出。
 type graphPulse struct {
-	active bool
-	start  time.Time
-	kind   graphKind
-	id     int64
-	label  string
+	active   bool
+	start    time.Time
+	key      graphKey
+	depths   map[graphKey]int
+	maxDepth int
 }
 
-// graphKey 节点身份（筛选/重排后下标会变，脉冲与聚焦用身份定位）。
-type graphKey struct {
-	kind  graphKind
-	id    int64
-	label string
-}
-
-// reset 回到初始视图：1 倍、不偏移；筛选条件在 atlasUI 里，不随视图重置。
+// reset 回到初始视图：1 倍、不偏移。
 func (g *graphView) reset() { *g = graphView{zoom: 1, hover: -1} }
 
 // ensure 兜底：零值视图按 1 倍处理。
@@ -175,45 +169,74 @@ func (g *graphView) hitAt(x, y float32) *graphHit {
 	return nil
 }
 
-// focus 双击某个节点：把镜头推到该节点居中，并从这里发出一轮脉冲。
-// 节点世界坐标由调用方用当前 zoom/pan 反算后传入。
-func (g *graphView) focusOn(h graphHit, wx, wy float32, now time.Time) {
-	targetZoom := maxFloat(g.zoom, graphFocusZoom)
-	g.focus = graphFocus{
-		active:   true,
-		start:    now,
-		fromZoom: g.zoom, fromPanX: g.panX, fromPanY: g.panY,
-		toZoom: targetZoom,
-		toPanX: g.w/2 - wx*targetZoom,
-		toPanY: g.h/2 - wy*targetZoom,
+// ---- 悬停脉冲 ----
+
+// hoverNode 跟随悬停状态开始 / 结束脉冲。
+//
+// 悬停到节点：以它为中心算一次 BFS 层级并发脉冲；换一个节点：从新节点重新开始；
+// 离开节点 / 离开画布：立刻结束（用户要的「移开就结束」）。
+func (g *graphView) hoverNode(nodes []graphNode, edges [][2]int, idx int, now time.Time) {
+	if idx < 0 || idx >= len(nodes) {
+		g.pulse.active = false
+		return
 	}
-	g.pulse = graphPulse{active: true, start: now, kind: h.kind, id: h.id, label: h.label}
+	key := graphKey{kind: nodes[idx].kind, id: nodes[idx].id, label: nodes[idx].label}
+	if g.pulse.active && g.pulse.key == key {
+		return // 同一个节点：让已经在跑的脉冲继续，不要每帧重置
+	}
+	depths, maxDepth := graphBFS(nodes, edges, idx)
+	g.pulse = graphPulse{active: true, start: now, key: key, depths: depths, maxDepth: maxDepth}
 }
 
-// advance 推进镜头动画与脉冲；返回是否还需要下一帧。
-func (g *graphView) advance(now time.Time) bool {
-	if g.focus.active {
-		t := float32(now.Sub(g.focus.start)) / float32(graphFocusDur)
-		if t >= 1 {
-			g.zoom, g.panX, g.panY = g.focus.toZoom, g.focus.toPanX, g.focus.toPanY
-			g.focus.active = false
-		} else {
-			if t < 0 {
-				t = 0
+// pulseDone 脉冲是否已经放完（所有跳数 + 淡出）。
+func (g *graphView) pulseDone(now time.Time) bool {
+	if !g.pulse.active {
+		return true
+	}
+	span := time.Duration(g.pulse.maxDepth)*pulseHop + pulseTravel + pulseFade
+	return now.Sub(g.pulse.start) > span
+}
+
+// graphBFS 从 from 出发做广度优先，返回每个节点的最短跳数与最大跳数。
+//
+// 边按无向处理（关系图里「归属」反过来也是关系）；未连通的节点不进 depths。
+func graphBFS(nodes []graphNode, edges [][2]int, from int) (map[graphKey]int, int) {
+	adj := make([][]int, len(nodes))
+	for _, e := range edges {
+		a, b := e[0], e[1]
+		if a < 0 || b < 0 || a >= len(nodes) || b >= len(nodes) {
+			continue
+		}
+		adj[a] = append(adj[a], b)
+		adj[b] = append(adj[b], a)
+	}
+	depths := map[graphKey]int{{kind: nodes[from].kind, id: nodes[from].id, label: nodes[from].label}: 0}
+	seen := make([]bool, len(nodes))
+	seen[from] = true
+	queue := []int{from}
+	maxDepth := 0
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, next := range adj[cur] {
+			if seen[next] {
+				continue
 			}
-			e := 1 - float32(math.Pow(1-float64(t), 3)) // ease-out cubic
-			g.zoom = g.focus.fromZoom + (g.focus.toZoom-g.focus.fromZoom)*e
-			g.panX = g.focus.fromPanX + (g.focus.toPanX-g.focus.fromPanX)*e
-			g.panY = g.focus.fromPanY + (g.focus.toPanY-g.focus.fromPanY)*e
+			seen[next] = true
+			d := depths[graphKey{kind: nodes[cur].kind, id: nodes[cur].id, label: nodes[cur].label}] + 1
+			depths[graphKey{kind: nodes[next].kind, id: nodes[next].id, label: nodes[next].label}] = d
+			if d > maxDepth {
+				maxDepth = d
+			}
+			queue = append(queue, next)
 		}
 	}
-	if g.pulse.active && now.Sub(g.pulse.start) > graphPulseDur+300*time.Millisecond {
-		g.pulse.active = false
-	}
-	return g.focus.active || g.pulse.active
+	return depths, maxDepth
 }
 
-// graphCanvasInput 处理拓扑画布的输入：滚轮缩放、拖动平移、单击跳转、双击聚焦。
+// ---- 输入 ----
+
+// graphCanvasInput 处理拓扑画布的输入：滚轮缩放、拖动平移、单击跳转。
 //
 // 返回 true 表示消费掉事件：滚轮不会再滚页面，拖动也不会触发其它手势。
 func (a *App) graphCanvasInput(ev ui.InputEvent) bool {
@@ -242,16 +265,6 @@ func (a *App) graphCanvasInput(ev ui.InputEvent) bool {
 		g.downX, g.downY = ev.X, ev.Y
 		g.moved = false
 		g.pressed = g.hitAt(ev.X, ev.Y)
-		// 双击（ev.Clicks>=2）：聚焦该节点并发一轮脉冲，不进入拖动。
-		// 同时清掉 pressed：双击的抬起不应再被当成「单击跳转」，否则页面会
-		// 立刻跳走，聚焦和脉冲根本看不见。
-		if ev.Clicks >= 2 && g.pressed != nil {
-			wx, wy := g.world(ev.X, ev.Y)
-			g.focusOn(*g.pressed, wx, wy, time.Now())
-			g.pressed, g.dragging, g.moved = nil, false, false
-			a.requestFrame()
-			return true
-		}
 		g.dragging = false
 		return true
 	case ui.InputPointerMove:
@@ -301,55 +314,6 @@ func (a *App) graphActivate(h graphHit) {
 	case gkTodo:
 		a.page = "todos"
 	}
-}
-
-// ---- 筛选 ----
-
-// filterGraph 按标签筛选：命中节点 + 它们的一跳邻居（保留上下文），并重排下标。
-//
-// Obsidian 的搜索也是这样：只留命中项会让图失去意义，所以把直接相连的邻居一起留着。
-func filterGraph(nodes []graphNode, edges [][2]int, query string) ([]graphNode, [][2]int) {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return nodes, edges
-	}
-	matched := make([]bool, len(nodes))
-	keep := make([]bool, len(nodes))
-	for i := range nodes {
-		if strings.Contains(strings.ToLower(nodes[i].label), q) {
-			matched[i], keep[i] = true, true
-		}
-	}
-	for _, e := range edges {
-		a, b := e[0], e[1]
-		if a < 0 || b < 0 || a >= len(nodes) || b >= len(nodes) {
-			continue
-		}
-		if matched[a] {
-			keep[b] = true
-		}
-		if matched[b] {
-			keep[a] = true
-		}
-	}
-	idx := make(map[int]int, len(nodes))
-	out := make([]graphNode, 0, len(nodes))
-	for i := range nodes {
-		if !keep[i] {
-			continue
-		}
-		idx[i] = len(out)
-		out = append(out, nodes[i])
-	}
-	kept := make([][2]int, 0, len(edges))
-	for _, e := range edges {
-		a, okA := idx[e[0]]
-		b, okB := idx[e[1]]
-		if okA && okB {
-			kept = append(kept, [2]int{a, b})
-		}
-	}
-	return out, kept
 }
 
 // ---- 几何 ----

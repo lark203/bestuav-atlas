@@ -141,16 +141,42 @@ func TestScreenshots(t *testing.T) {
 	save("atlas-graph-all")
 	a.atlasUI.graph.reset()
 
-	// 脉冲：把脉冲起点回拨 260ms，截到「亮点跑到一半」的那一帧。
+	// 悬停脉冲：同一个 Tester 里把指针移到项目节点上，200ms 时截「亮点跑在半路」。
 	a.openProjectGraph(1)
-	a.atlasUI.graph.pulse = graphPulse{
-		active: true,
-		start:  time.Now().Add(-260 * time.Millisecond),
-		kind:   gkProject,
-		id:     1,
-		label:  a.atlas().projectName(1),
+	{
+		tt := ui.NewTester(a.View, 1440, 900)
+		tt.Frame()
+		g := &a.atlasUI.graph
+		var hit graphHit
+		for _, h := range g.hits {
+			if h.kind == gkProject {
+				hit = h
+				break
+			}
+		}
+		if hit.kind == gkProject {
+			// 画布是页面里的一个元素：先把指针挪到窗口 (0,0) 反推出画布原点，
+			// 再把指针移到节点的窗口坐标上（PointerPosition 给的是元素局部坐标）。
+			tt.Move(0, 0)
+			tt.Frame()
+			ox, oy := -g.pointerX, -g.pointerY
+			tt.Move(hit.x+ox, hit.y+oy)
+			tt.Frame() // 悬停成立 → 开始脉冲
+			shot := func(name string) {
+				tt.Frame()
+				if img := tt.Image(); img != nil {
+					if f, err := os.Create(filepath.Join(dir, name+".png")); err == nil {
+						_ = png.Encode(f, img)
+						_ = f.Close()
+					}
+				}
+			}
+			time.Sleep(200 * time.Millisecond)
+			shot("atlas-topology-pulse") // 亮点跑到半路
+			time.Sleep(240 * time.Millisecond)
+			shot("atlas-topology-pulse-lit") // 邻居被触达、正在亮起
+		}
 	}
-	save("atlas-topology-pulse")
 	a.atlasUI.graph.pulse.active = false
 	a.atlasUI.graph.reset()
 

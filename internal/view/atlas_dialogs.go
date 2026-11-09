@@ -40,10 +40,8 @@ type atlasUI struct {
 
 	// graphProject 关系图谱弹窗的作用域：0 = 全量总览；>0 = 只看该项目的拓扑图。
 	graphProject int64
-	// graph 是拓扑画布的缩放 / 平移 / 悬停状态（见 graph_canvas.go）。
+	// graph 是拓扑画布的缩放 / 平移 / 悬停 / 脉冲状态（见 graph_canvas.go）。
 	graph graphView
-	// graphFilter 拓扑图的标签筛选（命中节点 + 一跳邻居）。
-	graphFilter string
 
 	// ---- 仓库页 ----
 	sel         map[int64]bool
@@ -627,16 +625,8 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 				a.requestFrame()
 			}
 		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.TextInput(c, &a.atlasUI.graphFilter).Width(180).Placeholder("筛选节点名称…")
-			if a.atlasUI.graphFilter != "" {
-				if smallButton(c, "清除").Clicked() {
-					a.atlasUI.graphFilter = ""
-				}
-			}
-			ui.Text(c, "滚轮以鼠标位置为中心缩放 · 拖动空白处平移 · 单击节点跳转 · 双击聚焦并发脉冲").
-				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-		})
+		ui.Text(c, "滚轮以鼠标位置为中心缩放 · 拖动空白处平移 · 单击节点跳转 · 悬停节点发出脉冲（移开即停）").
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 
 		if pid == 0 {
 			if len(d.projects) == 0 && len(d.repos) == 0 && len(d.todos) == 0 {
@@ -671,12 +661,8 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 				}
 			})
 		})
-		if a.atlasUI.graphFilter != "" && g.visible == 0 {
-			ui.Text(c, "没有匹配「"+a.atlasUI.graphFilter+"」的节点，换个关键词试试。").
-				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-		}
-		// 聚焦镜头与脉冲是时间动画：动画期间每 16ms 要一帧。
-		if g.pulse.active || g.focus.active {
+		// 脉冲是时间动画：还在放的时候每 16ms 要一帧；放完就自然停。
+		if g.pulse.active && !g.pulseDone(time.Now()) {
 			c.After(16 * time.Millisecond)
 		}
 	})
@@ -1021,15 +1007,6 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 	g := &a.atlasUI.graph
 	g.w, g.h = r.W, r.H
 	g.ensure()
-	g.advance(time.Now())
-
-	// 标签筛选：命中节点 + 一跳邻居（保留上下文），下标会重排。
-	nodes, edges = filterGraph(nodes, edges, a.atlasUI.graphFilter)
-	g.visible = len(nodes)
-	if len(nodes) == 0 {
-		g.hits = g.hits[:0]
-		return
-	}
 
 	if ring {
 		// 全量关系图：项目内圈 / 仓库中圈 / 待办外圈。力导向在节点少时会拉成
@@ -1079,12 +1056,14 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 			}
 		}
 	}
+	// 悬停即脉冲：悬停到节点就开始 BFS 涟漪，移开（或移到别处）立刻结束 / 重开。
+	g.hoverNode(nodes, edges, g.hover, time.Now())
 
-	// 脉冲中心：双击的节点。它相连的线在这一轮里保持高亮，亮点沿它们向外跑。
+	// 脉冲中心：正在发脉冲的节点（用身份定位，布局变化不受影响）。
 	pulseCenter := -1
 	if g.pulse.active {
 		for i := range nodes {
-			if nodes[i].kind == g.pulse.kind && nodes[i].id == g.pulse.id && nodes[i].label == g.pulse.label {
+			if (graphKey{kind: nodes[i].kind, id: nodes[i].id, label: nodes[i].label}) == g.pulse.key {
 				pulseCenter = i
 				break
 			}
@@ -1108,9 +1087,13 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 				col = kit.Alpha(t.Border, 0.35)
 			}
 		}
-		if pulseCenter >= 0 && (e[0] == pulseCenter || e[1] == pulseCenter) {
-			col = kit.Alpha(t.Accent, 0.85)
-			width = maxFloat(width, clampFloat(1.7*g.zoom, 1.1, 3))
+		if pulseCenter >= 0 {
+			_, da := g.pulse.depths[graphKey{kind: nodes[e[0]].kind, id: nodes[e[0]].id, label: nodes[e[0]].label}]
+			_, db := g.pulse.depths[graphKey{kind: nodes[e[1]].kind, id: nodes[e[1]].id, label: nodes[e[1]].label}]
+			if da && db {
+				col = kit.Alpha(t.Accent, 0.7)
+				width = maxFloat(width, clampFloat(1.6*g.zoom, 1.1, 3))
+			}
 		}
 		// 相邻边交替朝两弯：从同一个中枢出发的多条线因此散成扇形，而不是一根粗线。
 		bend := float32(0.11)
@@ -1163,22 +1146,25 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 	a.drawGraphPulse(p, r, t, g, nodes, edges, pts, pulseCenter)
 }
 
-// drawGraphPulse 画双击聚焦后的脉冲：中心一圈扩散波纹 + 沿每条相连边向外跑的亮点。
+// drawGraphPulse 画悬停节点的脉冲：中心一圈扩散波纹 + 沿边逐跳外送的亮点，
+// 每触达一个邻居，那个节点就亮一下再淡出，然后脉冲继续跳向它的邻居（BFS 涟漪）。
 //
-// 亮点用同一个二次贝塞尔求值（quadPoint），所以它严格贴着画出来的那条弧线跑；
-// 每条边的起点相位错开一点，看起来是一圈连续的波而不是所有点同时到达。
+// 节奏由 graphPulse.depths 决定：第 d 跳的边在 [ (d-1)*hop, (d-1)*hop+travel ]
+// 内跑亮点；节点在边跑完后亮起、fade 时长内淡出。亮点用 quadPoint 求值，
+// 所以严格贴着画出来的那条弧线跑。
 func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView, nodes []graphNode, edges [][2]int, pts [][2]float32, center int) {
 	if !g.pulse.active || center < 0 {
 		return
 	}
-	prog := float32(time.Since(g.pulse.start)) / float32(graphPulseDur)
-	if prog < 0 {
+	elapsed := time.Since(g.pulse.start)
+	if elapsed < 0 {
 		return
 	}
 	centerR := clampFloat(nodes[center].r*g.zoom, 2.5, 24)
 
-	// 中心扩散波纹（前 70% 时间内淡出）。
-	if prog <= 1 {
+	// 中心扩散波纹。
+	if elapsed < pulseTravel*2 {
+		prog := float32(elapsed) / float32(pulseTravel*2)
 		wave := centerR + 80*prog
 		alpha := 0.5 * (1 - prog)
 		p.Stroke(ui.Rect{
@@ -1187,27 +1173,34 @@ func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView
 		}, kit.Alpha(t.Accent, float64(alpha)), wave, clampFloat(1.8*(1-prog), 0.7, 2))
 	}
 
-	edgeN := 0
+	// 沿边跑的亮点：只画「父层 → 子层」方向的边，避免同一跳跑两遍。
 	for k, e := range edges {
-		if e[0] != center && e[1] != center {
+		pa, pb := nodes[e[0]], nodes[e[1]]
+		da, oka := g.pulse.depths[graphKey{kind: pa.kind, id: pa.id, label: pa.label}]
+		db, okb := g.pulse.depths[graphKey{kind: pb.kind, id: pb.id, label: pb.label}]
+		if !oka || !okb {
 			continue
 		}
-		other := e[0]
-		if other == center {
-			other = e[1]
+		from, to, depth := e[0], e[1], da
+		if db < da {
+			from, to, depth = e[1], e[0], db
+		}
+		if db == da { // 同层边不参与涟漪（BFS 树之外的横向连接）
+			continue
+		}
+		prog := float32(elapsed-time.Duration(depth)*pulseHop) / float32(pulseTravel)
+		if prog < 0 || prog > 1 {
+			continue
 		}
 		bend := float32(0.11)
 		if k%2 == 1 {
 			bend = -bend
 		}
 		sx, sy, cx, cy, ex, ey := graphCurvePoints(
-			r.X+pts[center][0], r.Y+pts[center][1], centerR,
-			r.X+pts[other][0], r.Y+pts[other][1], clampFloat(nodes[other].r*g.zoom, 2.5, 24),
+			r.X+pts[from][0], r.Y+pts[from][1], clampFloat(nodes[from].r*g.zoom, 2.5, 24),
+			r.X+pts[to][0], r.Y+pts[to][1], clampFloat(nodes[to].r*g.zoom, 2.5, 24),
 			bend)
-		// 每条边错开 6% 的相位；每条边放两颗亮点，形成一前一后的波。
-		head := prog*1.45 - float32(edgeN)*0.06
-		edgeN++
-		for _, at := range []float32{head, head - 0.13} {
+		for _, at := range []float32{prog, prog - 0.16} {
 			if at < 0 || at > 1 {
 				continue
 			}
@@ -1216,6 +1209,28 @@ func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView
 			alpha := 0.95 * (1 - at*0.55)
 			p.Fill(ui.Rect{X: x - rad, Y: y - rad, W: rad * 2, H: rad * 2}, kit.Alpha(t.Accent, float64(alpha)), rad)
 		}
+	}
+
+	// 被触达的节点亮一下再淡出：这是「邻居亮起，再跳二跳」的可视反馈。
+	for i := range nodes {
+		key := graphKey{kind: nodes[i].kind, id: nodes[i].id, label: nodes[i].label}
+		d, ok := g.pulse.depths[key]
+		if !ok || d == 0 {
+			continue
+		}
+		arrive := time.Duration(d-1)*pulseHop + pulseTravel
+		since := elapsed - arrive
+		if since < 0 || since > pulseFade {
+			continue
+		}
+		fade := 1 - float32(since)/float32(pulseFade)
+		rr := clampFloat(nodes[i].r*g.zoom, 2.5, 24)
+		// 实心加亮 + 一圈外扩光环
+		cx, cy := r.X+pts[i][0], r.Y+pts[i][1]
+		p.Fill(ui.Rect{X: cx - rr, Y: cy - rr, W: rr * 2, H: rr * 2}, kit.Alpha(t.Accent, float64(0.35*fade)), rr)
+		wave := rr + 16*(1-fade)
+		p.Stroke(ui.Rect{X: cx - wave, Y: cy - wave, W: wave * 2, H: wave * 2},
+			kit.Alpha(t.Accent, float64(0.9*fade)), wave, clampFloat(2*fade, 0.6, 2))
 	}
 }
 

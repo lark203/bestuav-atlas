@@ -582,78 +582,77 @@ func TestTopologyWheelZoom(t *testing.T) {
 	}
 }
 
-// TestFilterGraphKeepsNeighbors 筛选保留命中项与一跳邻居，重排后下标仍然自洽。
-func TestFilterGraphKeepsNeighbors(t *testing.T) {
+// TestGraphBFSDepths 脉冲层级：从中心出发按最短跳数扩散，链式关系能跳到二跳、三跳。
+func TestGraphBFSDepths(t *testing.T) {
 	nodes := []graphNode{
-		{label: "星图", kind: gkProject, id: 1},
-		{label: "lark203/bestuav-atlas", kind: gkRepo, id: 11},
-		{label: "写周报", kind: gkTodo, id: 21},
-		{label: "另一个项目", kind: gkProject, id: 2},
+		{label: "项目", kind: gkProject, id: 1},
+		{label: "仓库", kind: gkRepo, id: 11},
+		{label: "待办", kind: gkTodo, id: 21},
+		{label: "二层待办", kind: gkTodo, id: 22},
+		{label: "孤立", kind: gkTodo, id: 23},
 	}
-	edges := [][2]int{{0, 1}, {1, 2}, {3, 1}}
-	got, gotEdges := filterGraph(nodes, edges, "atlas")
-	if len(got) != 4 {
-		t.Fatalf("命中仓库 + 相连的项目/待办应保留 4 个节点，实际 %d：%+v", len(got), got)
+	edges := [][2]int{{0, 1}, {1, 2}, {1, 3}}
+	depths, maxDepth := graphBFS(nodes, edges, 0)
+	key := func(i int) graphKey {
+		return graphKey{kind: nodes[i].kind, id: nodes[i].id, label: nodes[i].label}
 	}
-	if len(gotEdges) != 3 {
-		t.Errorf("保留的边应仍是 3 条，实际 %d", len(gotEdges))
-	}
-	for _, e := range gotEdges {
-		if e[0] < 0 || e[1] < 0 || e[0] >= len(got) || e[1] >= len(got) {
-			t.Errorf("重排后的边越界：%v（节点数 %d）", e, len(got))
+	want := map[int]int{0: 0, 1: 1, 2: 2, 3: 2}
+	for i, d := range want {
+		if got, ok := depths[key(i)]; !ok || got != d {
+			t.Errorf("节点 %d 的跳数应为 %d，实际 %d（ok=%v）", i, d, got, ok)
 		}
 	}
-
-	only, _ := filterGraph(nodes, edges, "写周报")
-	if len(only) != 2 {
-		t.Errorf("命中待办 + 相连仓库应剩 2 个节点，实际 %d", len(only))
+	if _, ok := depths[key(4)]; ok {
+		t.Error("未连通的孤立节点不应进层级")
 	}
-	if empty, _ := filterGraph(nodes, edges, "不存在"); len(empty) != 0 {
-		t.Errorf("没有命中时结果应为空")
+	if maxDepth != 2 {
+		t.Errorf("最大跳数应为 2，实际 %d", maxDepth)
 	}
 }
 
-// TestGraphDoubleClickFocuses 双击节点：设置镜头推进目标并发起脉冲。
-func TestGraphDoubleClickFocuses(t *testing.T) {
-	a, st := newTestApp(t)
-	pid, _ := seedAtlas(t, a, st)
-	a.openProjectGraph(pid)
-	tt := ui.NewTester(a.View, 1200, 800)
-	tt.Frame()
-
-	g := &a.atlasUI.graph
-	if len(g.hits) == 0 {
-		t.Fatal("画布没有产出命中信息")
+// TestHoverPulseStartsAndEnds 悬停开始脉冲、同一节点不重置、移开立刻结束。
+func TestHoverPulseStartsAndEnds(t *testing.T) {
+	nodes := []graphNode{
+		{label: "项目", kind: gkProject, id: 1},
+		{label: "仓库", kind: gkRepo, id: 11},
+		{label: "待办", kind: gkTodo, id: 21},
 	}
-	var hit graphHit
-	for _, h := range g.hits {
-		if h.kind == gkProject {
-			hit = h
-		}
+	edges := [][2]int{{0, 1}, {1, 2}}
+	g := graphView{zoom: 1}
+	now := time.Now()
+	g.hoverNode(nodes, edges, 1, now)
+	if !g.pulse.active {
+		t.Fatal("悬停节点应开始脉冲")
 	}
-	if hit.kind != gkProject {
-		t.Fatal("没找到项目节点")
+	if g.pulse.key != (graphKey{kind: gkRepo, id: 11, label: "仓库"}) {
+		t.Errorf("脉冲中心应是悬停的节点，实际 %+v", g.pulse.key)
 	}
-	if !a.graphCanvasInput(ui.InputEvent{Kind: ui.InputPointerDown, Button: 0, Clicks: 2, X: hit.x, Y: hit.y}) {
-		t.Fatal("双击应被画布消费")
+	if g.pulse.maxDepth != 1 {
+		t.Errorf("从中间节点出发最大跳数应是 1，实际 %d", g.pulse.maxDepth)
 	}
-	if !g.pulse.active || !g.focus.active {
-		t.Fatalf("双击后应进入聚焦 + 脉冲：pulse=%v focus=%v", g.pulse.active, g.focus.active)
-	}
-	if g.focus.toZoom <= 1 {
-		t.Errorf("聚焦应放大：目标 zoom=%v", g.focus.toZoom)
-	}
-	// 双击的抬起不能触发单击跳转，否则页面会立刻切走、聚焦和脉冲都看不见。
-	a.graphCanvasInput(ui.InputEvent{Kind: ui.InputPointerUp, Button: 0, X: hit.x, Y: hit.y})
-	if a.page != "topology" {
-		t.Errorf("双击后不应跳转页面，实际 %q", a.page)
+	start := g.pulse.start
+	time.Sleep(10 * time.Millisecond)
+	g.hoverNode(nodes, edges, 1, time.Now())
+	if !g.pulse.start.Equal(start) {
+		t.Error("同一节点上继续悬停不应重置脉冲")
 	}
 
-	// 镜头推进结束后动画应自然停下。
-	time.Sleep(graphFocusDur + 80*time.Millisecond)
-	tt.Frame()
-	if g.focus.active {
-		t.Error("镜头推进应已结束")
+	g.hoverNode(nodes, edges, -1, time.Now())
+	if g.pulse.active {
+		t.Error("移开节点应立即结束脉冲")
+	}
+}
+
+// TestPulseDoneAfterLastHop 脉冲在最后一跳 + 淡出后结束。
+func TestPulseDoneAfterLastHop(t *testing.T) {
+	g := graphView{pulse: graphPulse{active: true, maxDepth: 2, start: time.Now()}}
+	span := 2*pulseHop + pulseTravel + pulseFade
+	if g.pulseDone(time.Now()) {
+		t.Error("刚开始的脉冲不应结束")
+	}
+	g.pulse.start = time.Now().Add(-span - 10*time.Millisecond)
+	if !g.pulseDone(time.Now()) {
+		t.Error("超过总时长后脉冲应结束")
 	}
 }
 
