@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"bestuav-atlas/internal/store"
+	"bestuav-atlas/internal/ui/icons"
 	"bestuav-atlas/internal/ui/kit"
 )
 
@@ -21,6 +22,14 @@ const (
 	stickyW    = 300
 	stickyH    = 440
 	stickyEdge = 24 // 与屏幕（或主窗口）边缘的间距
+
+	// stickyMiniSize 无操作超时后折叠成的小方块边长（DIP）。
+	stickyMiniSize = 64
+	// stickyMinW / stickyMinH 拖动 resize 的下限：太小连一行字都放不下。
+	stickyMinW = 220
+	stickyMinH = 160
+	// stickyIdleTimeout 多少秒没有任何交互就折叠成小方块。
+	stickyIdleTimeout = 60 * time.Second
 )
 
 // stickyBuckets 便签分段的固定顺序；与 todoBucket 的返回值一致。
@@ -43,6 +52,30 @@ func (a *App) stickyApplyOnTop() {
 	}
 	a.stickyTopTop = a.settings.StickyAlwaysOnTop
 	a.stickyWin.SetAlwaysOnTop(a.stickyTopTop)
+}
+
+// stickyApplySize 把当前尺寸（正常态用 stickySizeW/H，折叠态用 stickyMiniSize）
+// 写到窗口；标题栏图钉即时切换置顶、resize 手柄拖动、折叠/恢复都走这里。
+func (a *App) stickyApplySize() {
+	if a.stickyWin == nil {
+		return
+	}
+	if a.stickyMini {
+		a.stickyWin.SetSize(stickyMiniSize, stickyMiniSize)
+		return
+	}
+	a.stickyWin.SetSize(a.stickySizeW, a.stickySizeH)
+}
+
+// stickyToggleTop 标题栏图钉：即时切换「始终置顶」并落盘；图钉图标颜色由
+// stickyView 读 settings.StickyAlwaysOnTop 决定，无需另存状态。
+func (a *App) stickyToggleTop() {
+	a.settings.StickyAlwaysOnTop = !a.settings.StickyAlwaysOnTop
+	a.stickyTopTop = a.settings.StickyAlwaysOnTop
+	if a.stickyWin != nil {
+		a.stickyWin.SetAlwaysOnTop(a.stickyTopTop)
+	}
+	a.persist()
 }
 
 // stickySyncWindow 根据开关创建/销毁便签窗口。
@@ -69,8 +102,8 @@ func (a *App) openStickyWindow() {
 	}
 	opts := mygo.WindowOptions{
 		Title:             "今日便签",
-		Width:             stickyW,
-		Height:            stickyH,
+		Width:             a.stickySizeW,
+		Height:            a.stickySizeH,
 		Frameless:         true,
 		AlwaysOnTop:       a.settings.StickyAlwaysOnTop,
 		SkipTaskbar:       true,
@@ -95,6 +128,8 @@ func (a *App) openStickyWindow() {
 	}
 	a.stickyWin = win
 	a.stickyTopTop = a.settings.StickyAlwaysOnTop
+	// 从打开时刻起算 60 秒：一直没交互就折叠成小方块（见 stickyView）。
+	a.stickyLastInteract = time.Now()
 	win.OnClosed(func() {
 		a.stickyWin = nil
 		a.stickyApplied = false
@@ -180,54 +215,123 @@ func (a *App) stickyView(c *ui.Context) {
 	t := c.Theme()
 	a.stickyRememberPos()
 
-	// 静止时 30 秒一次心跳：刷新「剩 X 分钟」与跨天边界。
-	c.After(30 * time.Second)
-
 	groups := a.stickyToday(now)
 	total := 0
 	for _, items := range groups {
 		total += len(items)
 	}
 
-	ui.Column(c).Fill().Background(t.Background).Gap(0).Children(func() {
-		// 标题栏兼拖拽把手：只有这一条 DragWindow，内容区的勾选框照常可点。
-		ui.Row(c).Shrink(0).Padding(12, 10).Gap(8).AlignItems(ui.Center).
-			Background(t.Surface).DragWindow().Label("拖动便签").
-			Children(func() {
-				ui.Text(c, "今日便签").Bold().FontSize(t.FontSize).SingleLine()
-				ui.Text(c, now.Format("01-02")+" "+weekdayCN(now)).
-					FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
-				ui.Text(c, "").Grow(1)
-				ui.Text(c, itoa(total)+" 条").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+	// 折叠态：60 秒没有任何交互（悬停 / 点击 / 拖动 / 缩放）就缩成小方块，
+	// 只显示待办总数；点一下小方块恢复。展开态下靠 Hovered/Pressed 持续刷新
+	// 最后交互时刻，指针停在便签上不会误折叠。
+	if !a.stickyMini {
+		if now.Sub(a.stickyLastInteract) > stickyIdleTimeout {
+			a.stickyMini = true
+			a.stickyApplySize()
+		}
+	}
+
+	root := ui.Box(c).Fill().Background(t.Background)
+	// 只有展开态才把「悬停 / 按住」当作交互：折叠态靠点击恢复，避免鼠标一靠近就弹开。
+	if !a.stickyMini && (root.Hovered() || root.Pressed()) {
+		a.stickyLastInteract = now
+	}
+	root.Children(func() {
+		if a.stickyMini {
+			mini := ui.Box(c).Fill().Cursor(ui.CursorPointer).Tooltip("点击展开便签").
+				Background(t.Surface).Children(func() {
+				ui.Column(c).Gap(2).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, icons.Checklist).FontSize(18).TextColor(t.TextMuted)
+					ui.Text(c, itoa(total)).Bold().FontSize(22)
+					ui.Text(c, "待办").FontSize(t.FontSize - 3).TextColor(t.TextMuted)
+				})
+			})
+			if mini.Clicked() {
+				a.stickyMini = false
+				a.stickyLastInteract = now
+				a.stickyApplySize()
+			}
+			return
+		}
+
+		// 静止时 30 秒一次心跳：刷新「剩 X 分钟」与跨天边界。
+		c.After(30 * time.Second)
+
+		ui.Column(c).Fill().Gap(0).Children(func() {
+			// 标题栏兼拖拽把手：只有这一条 DragWindow，内容区的勾选框照常可点。
+			ui.Row(c).Shrink(0).Padding(12, 10).Gap(8).AlignItems(ui.Center).
+				Background(t.Surface).DragWindow().Label("拖动便签").
+				Children(func() {
+					ui.Text(c, "今日便签").Bold().FontSize(t.FontSize).SingleLine()
+					ui.Text(c, now.Format("01-02")+" "+weekdayCN(now)).
+						FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+					ui.Text(c, "").Grow(1)
+					// 图钉：快捷切换始终置顶，不必进设置页。钉住态用强调色高亮。
+					pinCol := t.TextMuted
+					if a.settings.StickyAlwaysOnTop {
+						pinCol = t.Accent
+					}
+					pin := ui.Box(c).Size(22, 22).Cursor(ui.CursorPointer).Tooltip("切换始终置顶").
+						Children(func() { ui.Icon(c, icons.Pin).FontSize(14).TextColor(pinCol) })
+					if pin.Clicked() {
+						a.stickyToggleTop()
+						a.stickyLastInteract = now
+					}
+					ui.Text(c, itoa(total)+" 条").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+				})
+
+			ui.Column(c).Gap(10).Padding(12, 10).Grow(1).Children(func() {
+				if total == 0 {
+					ui.Column(c).Gap(6).Grow(1).Children(func() {
+						ui.Text(c, "今天没有要做的待办").TextColor(t.TextMuted)
+						ui.Text(c, "去待办页加一条，或把某条的开始日改到今天。").
+							FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+						ui.Row(c).Children(func() {
+							if ui.Button(c, "打开星图").Clicked() {
+								a.showMainWindow()
+							}
+						})
+					})
+					return
+				}
+				for _, bucket := range stickyBuckets {
+					items := groups[bucket]
+					if len(items) == 0 {
+						continue
+					}
+					a.stickyBucket(c, t, bucket, items, now)
+				}
 			})
 
-		ui.Column(c).Gap(10).Padding(12, 10).Grow(1).Children(func() {
-			if total == 0 {
-				ui.Column(c).Gap(6).Grow(1).Children(func() {
-					ui.Text(c, "今天没有要做的待办").TextColor(t.TextMuted)
-					ui.Text(c, "去待办页加一条，或把某条的开始日改到今天。").
-						FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-					ui.Row(c).Children(func() {
-						if ui.Button(c, "打开星图").Clicked() {
-							a.showMainWindow()
-						}
-					})
-				})
-				return
-			}
-			for _, bucket := range stickyBuckets {
-				items := groups[bucket]
-				if len(items) == 0 {
-					continue
-				}
-				a.stickyBucket(c, t, bucket, items, now)
-			}
+			ui.Row(c).Shrink(0).Padding(12, 8).Gap(6).AlignItems(ui.Center).
+				Background(t.Surface).Children(func() {
+				ui.Text(c, "勾选即完成 · 拖动标题栏移动 · 右下角可缩放 · 设置里可关闭").
+					FontSize(t.FontSize - 3).TextColor(t.TextMuted).SingleLine()
+			})
 		})
 
-		ui.Row(c).Shrink(0).Padding(12, 8).Gap(6).AlignItems(ui.Center).
-			Background(t.Surface).Children(func() {
-			ui.Text(c, "勾选即完成 · 拖动标题栏移动 · 设置里可关闭").
-				FontSize(t.FontSize - 3).TextColor(t.TextMuted).SingleLine()
+		// 右下角缩放手柄：frameless 窗口在 Windows 上没有原生缩放边，自己画一个。
+		// Dragged() 每帧给出按下期间指针的位移增量，直接累加到窗口尺寸即可。
+		handle := ui.Box(c).Absolute().Right(0).Bottom(0).Size(20, 20).
+			Cursor(ui.CursorResizeNWSE)
+		dx, dy, held := handle.Dragged()
+		if held {
+			nw := a.stickySizeW + int(dx)
+			nh := a.stickySizeH + int(dy)
+			if nw < stickyMinW {
+				nw = stickyMinW
+			}
+			if nh < stickyMinH {
+				nh = stickyMinH
+			}
+			a.stickySizeW, a.stickySizeH = nw, nh
+			a.stickyWin.SetSize(nw, nh)
+			a.stickyLastInteract = now
+		}
+		handle.Draw(func(p *ui.Painter, r ui.Rect) {
+			// 两条对角短线画在右下角，提示这里可以拖动缩放。
+			p.Line(r.X+r.W-11, r.Y+r.H-2, r.X+r.W-2, r.Y+r.H-11, 1.5, t.TextMuted)
+			p.Line(r.X+r.W-17, r.Y+r.H-2, r.X+r.W-2, r.Y+r.H-17, 1.5, t.TextMuted)
 		})
 	})
 }
@@ -271,6 +375,14 @@ func (a *App) stickyTodoRow(c *ui.Context, t *ui.Theme, td store.Todo, now time.
 			title.TextColor(t.Danger)
 		}
 		tooltipIfSet(title, td.Note)
+		// 剩余时长：全天（无期限）的任务不显示；逾期的用危险色高亮紧迫感。
+		if cd, over := todoCountdown(td); cd != "" {
+			cdCol := t.TextMuted
+			if over {
+				cdCol = t.Danger
+			}
+			ui.Text(c, cd).Shrink(0).FontSize(t.FontSize - 3).TextColor(cdCol).SingleLine()
+		}
 	})
 }
 

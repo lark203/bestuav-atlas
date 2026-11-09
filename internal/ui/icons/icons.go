@@ -60,6 +60,14 @@ var (
 	// 钢琴（音符）图标。
 	Music = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18" r="2.5" fill="currentColor"/><circle cx="16.5" cy="16" r="2.5" fill="currentColor"/></svg>`))
 
+	// 图钉（置顶/钉住）：无边框便签标题栏用它快捷切换始终置顶；钉住态用强调色高亮，
+	// 未钉住用次要色，无需两套 SVG。
+	Pin = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>`))
+
+	// 关系图谱（节点 + 连线）：项目页「关系图谱」按钮，三个节点用两道连线表达
+	// 项目→仓库→待办的归属关系（见 graphDialog）。
+	Share2 = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="19" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M8.59 13.51 15.42 17.49M15.41 6.51 8.59 10.49"/></svg>`))
+
 	// 投入滑块（两档滑轨 + 一个拇指）图标。
 	Sliders = ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="16" r="2.2" fill="none" stroke="currentColor" stroke-width="2"/></svg>`))
 

@@ -2,6 +2,9 @@ package view
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"bestuav-atlas/internal/forge"
 	"bestuav-atlas/internal/logging"
 	"bestuav-atlas/internal/store"
+	"bestuav-atlas/internal/ui/kit"
 )
 
 // 本文件是三个业务页的弹窗与表单状态。
@@ -164,6 +168,12 @@ func (a *App) openImportDialog() {
 	}
 }
 
+// openGraphDialog 打开「关系图谱」：仓库居中、左连项目、右连待办的关系图。
+func (a *App) openGraphDialog() {
+	a.atlasUI.dialog = "graph"
+	a.atlasUI.dialogPage = a.page
+}
+
 // openRepoDialog 打开仓库编辑；r.ID 为 0 时是新建。
 func (a *App) openRepoDialog(r store.Repo) {
 	d := a.atlas()
@@ -283,6 +293,8 @@ func (a *App) atlasDialogs(c *ui.Context, t *ui.Theme) {
 		a.commitDialog(c, t)
 	case "erase":
 		a.eraseDialog(c, t)
+	case "graph":
+		a.graphDialog(c, t)
 	}
 }
 
@@ -461,66 +473,70 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 	a.atlasModal(c, t, "导入仓库", func() {
 		dialogDesc(c, t, "本地文件夹会自动解析 git 远端、分支与状态；远程仓库每行一个 owner/repo 或地址，已存在的会跳过。")
 
-		// ---- 本地文件夹 ----
-		ui.Text(c, "从本地文件夹导入").Bold().FontSize(t.FontSize - 2)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.PrimaryButton(c, "选择文件夹…").Clicked() && !a.atlasUI.busy {
-				a.pickLocalRepos(a.atlas().projectIDByName(a.atlasUI.importProject))
-			}
-			ui.Text(c, "可多选；会读 .git 的 origin 地址，没有远端时用文件夹名").
-				TextColor(t.TextMuted).FontSize(t.FontSize - 2)
-		})
+		ui.Column(c).Gap(12).Children(func() {
+			// ---- 本地文件夹 ----
+			kit.Card(c, t, func() {
+				kit.CardHeader(c, t, "从本地文件夹导入", "可多选；自动读 .git 的 origin 地址，没有远端时用文件夹名当作仓库名。", nil)
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					if ui.PrimaryButton(c, "选择文件夹…").Clicked() && !a.atlasUI.busy {
+						a.pickLocalRepos(a.atlas().projectIDByName(a.atlasUI.importProject))
+					}
+					ui.Text(c, "选中的目录会被扫描并登记为仓库；不读取远程列表，也不会改动磁盘上的代码。").
+						TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+				})
+			})
 
-		ui.Divider(c).Margin(4, 0)
+			// ---- 远程仓库 ----
+			kit.Card(c, t, func() {
+				kit.CardHeader(c, t, "从远程仓库导入", "每行一个 owner/repo 或完整地址；带域名的地址按域名自动识别平台。", nil)
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
+					ui.Text(c, "平台").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+					ui.Segmented(c, &a.atlasUI.importPlatform, "GitHub", "Gitee", "Gitea", "AtomGit")
+					ui.Text(c, "只影响「纯 owner/repo」行的归属").
+						FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+				})
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "用户名").Shrink(0).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+					// Grow 而不是固定 220：弹窗在窄窗口里变窄时输入框跟着缩，
+					// 不能把右侧挤出面板。
+					ui.TextInput(c, &a.atlasUI.importOwner).Grow(1).
+						Placeholder("owner；留空 = 当前令牌账号")
+				})
+				ui.Text(c, "Gitea 令牌没有 read:user 权限时，在这里填用户名即可改用公开仓库列表。").
+					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+				ui.TextArea(c, &a.atlasUI.importText).
+					Placeholder("owner/repo\nhttps://github.com/owner/repo\ngit@atomgit.com:owner/repo.git\n…").
+					Height(96)
 
-		// ---- 远程地址 ----
-		ui.Text(c, "从远程仓库导入").Bold().FontSize(t.FontSize - 2)
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			ui.Text(c, "平台").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-			ui.Segmented(c, &a.atlasUI.importPlatform, "GitHub", "Gitee", "Gitea", "AtomGit")
-			ui.Text(c, "只影响「纯 owner/repo」行的归属；带域名的地址按域名自动识别").
-				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "用户名").Shrink(0).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-			// Grow 而不是固定 220：弹窗在窄窗口里变窄时输入框跟着缩，
-			// 不能把右侧挤出面板。
-			ui.TextInput(c, &a.atlasUI.importOwner).Grow(1).
-				Placeholder("owner；留空 = 当前令牌账号")
-		})
-		ui.Text(c, "Gitea 令牌没有 read:user 权限时，在这里填用户名即可改用公开仓库列表。").
-			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-		ui.TextArea(c, &a.atlasUI.importText).
-			Placeholder("owner/repo\nhttps://github.com/owner/repo\ngit@atomgit.com:owner/repo.git\n…").
-			Height(90)
+				// 两个短字段并排（CrychicUI 的 FormRow 会在窄窗口里自动竖排）。
+				form.FormRow(c, []func(){
+					func() {
+						dialogRow(c, "归属项目", func() { a.projectSelect(c, "归属项目", &a.atlasUI.importProject) })
+					},
+					func() {
+						dialogRow(c, "本地根目录", func() { ui.TextInput(c, &a.atlasUI.importRoot).Placeholder(a.workRoot()) })
+					},
+				})
 
-		// 两个短字段并排（CrychicUI 的 FormRow 会在窄窗口里自动竖排）。
-		form.FormRow(c, []func(){
-			func() {
-				dialogRow(c, "归属项目", func() { a.projectSelect(c, "归属项目", &a.atlasUI.importProject) })
-			},
-			func() {
-				dialogRow(c, "本地根目录", func() { ui.TextInput(c, &a.atlasUI.importRoot).Placeholder(a.workRoot()) })
-			},
-		})
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					choice.Toggle(c, "导入后克隆", &a.atlasUI.importClone)
+				})
+				ui.Text(c, "勾选后把远程仓库克隆到「根目录/仓库名」；大仓库会慢，进度显示在页头。").
+					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			choice.Toggle(c, "导入后克隆", &a.atlasUI.importClone)
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					if ui.Button(c, "从 "+forgePlatforms[a.atlasUI.importPlatform].Label()+" 读取我的仓库").Clicked() && !a.atlasUI.busy {
+						a.fetchPlatformRepos(a.importPlatform(), a.atlasUI.importOwner)
+					}
+					if a.atlasUI.busy {
+						ui.Spinner(c)
+						ui.Text(c, "正在读取…").TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+					}
+				})
+				ui.Text(c, "读取列表需要该平台的令牌：设置 → 工作区；Gitea 还要填实例地址。").
+					TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+			})
 		})
-		ui.Text(c, "勾选后把远程仓库克隆到「根目录/仓库名」；大仓库会慢，进度显示在页头。").
-			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "从 "+forgePlatforms[a.atlasUI.importPlatform].Label()+" 读取我的仓库").Clicked() && !a.atlasUI.busy {
-				a.fetchPlatformRepos(a.importPlatform(), a.atlasUI.importOwner)
-			}
-			if a.atlasUI.busy {
-				ui.Spinner(c)
-				ui.Text(c, "正在读取…").TextColor(t.TextMuted).FontSize(t.FontSize - 2)
-			}
-		})
-		ui.Text(c, "读取列表需要该平台的令牌：设置 → 工作区；Gitea 还要填实例地址。").
-			TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 	}, func() {
 		dialogButtons(c, func() {
 			if ui.Button(c, "取消").Clicked() {
@@ -555,6 +571,296 @@ func (a *App) importDialog(c *ui.Context, t *ui.Theme) {
 			}
 		})
 	})
+}
+
+// graphDialog 关系图谱弹窗：用 Painter 在一块画布上画「项目 → 仓库 → 待办」的关系。
+//
+// 仓库居中，向左的线归到所属项目（同一项目下多个仓库共用一条汇聚线），
+// 向右的线连到关联待办（按仓库聚拢，避免压成一团）。画布高度随数据量增长，
+// 弹窗外壳已包了滚动，内容多时中间区域可滚动查看。
+func (a *App) graphDialog(c *ui.Context, t *ui.Theme) {
+	a.atlasModal(c, t, "关系图谱", func() {
+		d := a.atlas()
+		dialogDesc(c, t, "仓库居中，向左连线到归属项目，向右连线到关联待办；同一项目下的多个仓库共用一条汇聚线。")
+
+		if len(d.repos) == 0 && len(d.projects) == 0 && len(d.todos) == 0 {
+			ui.Text(c, "还没有任何项目 / 仓库 / 待办，先去录入一些数据再来看关系图。").
+				TextColor(t.TextMuted)
+			return
+		}
+
+		// 画布高度：行数取「项目数 / 仓库数」较大者，每行给足高度；上限避免过高。
+		rowCount := len(d.repos)
+		if len(d.projects)+1 > rowCount { // +1 = 可能有的「未归属」
+			rowCount = len(d.projects) + 1
+		}
+		if rowCount < 1 {
+			rowCount = 1
+		}
+		graphH := 48 + rowCount*46
+		if graphH > 920 {
+			graphH = 920
+		}
+
+		ui.Row(c).Fill().Children(func() {
+			ui.Box(c).Grow(1).Height(float32(graphH)).Children(func() {
+				ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Draw(func(p *ui.Painter, r ui.Rect) {
+					a.drawAtlasGraph(p, r, t, d)
+				})
+			})
+		})
+	}, func() {
+		dialogButtons(c, func() {
+			if ui.Button(c, "关闭").Clicked() {
+				a.closeAtlasDialog()
+			}
+		})
+	})
+}
+
+// gnode 图谱里的一个节点（项目 / 仓库 / 待办）。
+type gnode struct {
+	x, y, w, h float32
+	label      string
+	border     ui.Color
+	textCol    ui.Color
+}
+
+// drawAtlasGraph 把关系图画在 r 里：项目在左、仓库居中、待办在右，连线表达归属。
+func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCache) {
+	const pad float32 = 16
+	const projW, repoW, todoW, nodeH float32 = 150, 120, 150, 22
+	const size float32 = 12
+
+	leftX := r.X + pad            // 项目列左缘
+	repoX := r.X + (r.W-repoW)/2   // 仓库列左缘（居中）
+	rightX := r.X + r.W - pad - todoW // 待办列左缘
+
+	// ---- 收集项目（含「未归属」）----
+	type proj struct{ id int64; name string; y float32 }
+	projs := make([]proj, 0)
+	projSeen := map[int64]bool{}
+	needUnassigned := false
+	for _, rp := range d.repos {
+		if rp.ProjectID == 0 {
+			needUnassigned = true
+		} else if !projSeen[rp.ProjectID] {
+			projSeen[rp.ProjectID] = true
+			projs = append(projs, proj{id: rp.ProjectID, name: d.projectName(rp.ProjectID)})
+		}
+	}
+	for _, td := range d.todos {
+		if td.ProjectID == 0 {
+			needUnassigned = true
+		} else if !projSeen[td.ProjectID] {
+			projSeen[td.ProjectID] = true
+			projs = append(projs, proj{id: td.ProjectID, name: d.projectName(td.ProjectID)})
+		}
+	}
+	for _, pr := range d.projects {
+		if !projSeen[pr.ID] {
+			projSeen[pr.ID] = true
+			projs = append(projs, proj{id: pr.ID, name: pr.Name})
+		}
+	}
+	if needUnassigned {
+		projs = append(projs, proj{id: 0, name: "未归属"})
+	}
+	// 项目纵向均匀分布
+	projY := make(map[int64]float32, len(projs))
+	layVertical(len(projs), pad, r.H, func(i int, y float32) { projY[projs[i].id] = y })
+
+	// ---- 仓库纵向均匀分布 ----
+	type repo struct{ id int64; name string; col ui.Color; y float32 }
+	repos := make([]repo, 0, len(d.repos))
+	repoY := make(map[int64]float32, len(d.repos))
+	layVerticalIdx(len(d.repos), pad, r.H, func(i int, y float32) {
+		rp := d.sortedRepos()[i]
+		repos = append(repos, repo{id: rp.ID, name: rp.Name, col: repoStatusColor(t, rp.Status)})
+		repoY[rp.ID] = y
+	})
+
+	// ---- 待办：连到其仓库（优先）或项目，按锚点聚拢 ----
+	type todo struct{ anchor int64; isProj bool; title string; done bool; y float32 }
+	todos := make([]todo, 0)
+	// 先按锚点分组，便于堆叠
+	byAnchor := map[string][]todo{}
+	for _, td := range d.todos {
+		var anchor int64
+		isProj := false
+		if td.RepoID != 0 {
+			if _, ok := repoY[td.RepoID]; !ok {
+				continue // 仓库不在列表里（理论上不会）
+			}
+			anchor = td.RepoID
+		} else if td.ProjectID != 0 {
+			if _, ok := projY[td.ProjectID]; !ok {
+				continue
+			}
+			anchor = td.ProjectID
+			isProj = true
+		} else {
+			continue // 既无仓库也无项目：不显示
+		}
+		rec := todo{anchor: anchor, isProj: isProj, title: td.Title, done: td.Status == TodoDone}
+		byAnchor[anchorKey(anchor, isProj)] = append(byAnchor[anchorKey(anchor, isProj)], rec)
+	}
+	const maxPerAnchor = 6
+	const step float32 = 20
+	for key, group := range byAnchor {
+		// 稳定排序：未完成的在上、按标题
+		sort.SliceStable(group, func(i, j int) bool {
+			if group[i].done != group[j].done {
+				return !group[i].done
+			}
+			return group[i].title < group[j].title
+		})
+		// 锚点 y
+		var ay float32
+		if isProj, aid := parseAnchorKey(key); isProj {
+			ay = projY[aid]
+		} else {
+			ay = repoY[aid]
+		}
+		m := len(group)
+		if m > maxPerAnchor {
+			m = maxPerAnchor
+		}
+		for k := 0; k < m; k++ {
+			yy := ay + (float32(k) - float32(m-1)/2)*step
+			if yy < pad+nodeH/2 {
+				yy = pad + nodeH/2
+			}
+			if yy > r.H-pad-nodeH/2 {
+				yy = r.H - pad - nodeH/2
+			}
+			todos = append(todos, todo{anchor: anchorOfKey(key), isProj: isProjOfKey(key), title: group[k].title, done: group[k].done, y: yy})
+		}
+		if len(group) > maxPerAnchor {
+			yy := ay + (float32(m-1)-float32(m-1)/2)*step + step
+			if yy > r.H-pad-nodeH/2 {
+				yy = r.H - pad - nodeH/2
+			}
+			todos = append(todos, todo{anchor: anchorOfKey(key), isProj: isProjOfKey(key), title: fmt.Sprintf("+%d 条", len(group)-maxPerAnchor), done: false, y: yy})
+		}
+	}
+
+	edge := t.Border
+	// ---- 先画线（被节点盖在下面）----
+	// 项目 → 仓库
+	for _, rp := range repos {
+		pid := projectIDOfRepo(d, rp.id)
+		py, ok := projY[pid]
+		if !ok {
+			continue
+		}
+		p.Line(repoX, rp.y, leftX+projW, py, 1.2, edge)
+	}
+	// 仓库/项目 → 待办
+	for _, td := range todos {
+		var sx, sy float32
+		if td.isProj {
+			sx, sy = leftX+projW, projY[td.anchor]
+		} else {
+			sx, sy = repoX+repoW, repoY[td.anchor]
+		}
+		p.Line(sx, sy, rightX, td.y, 1.2, edge)
+	}
+
+	// ---- 节点 ----
+	drawNode := func(x, y, w, h float32, label string, border, textCol ui.Color) {
+		rr := ui.Rect{X: x, Y: y - h/2, W: w, H: h}
+		p.Fill(rr, t.Surface, 6)
+		p.Stroke(rr, border, 6, 1.5)
+		p.Text(x+8, y+size*0.32, truncateLabel(label, int(w/7)), size, textCol)
+	}
+	// 项目（左侧，强调色描边 + 强调色文字）
+	for _, pr := range projs {
+		drawNode(leftX, pr.y, projW, nodeH, pr.name, t.Accent, t.Accent)
+	}
+	// 仓库（居中，按状态色描边）
+	for _, rp := range repos {
+		drawNode(repoX, rp.y, repoW, nodeH, rp.name, rp.col, t.Text)
+	}
+	// 待办（右侧，未完成用次要色、已完成用成功色）
+	for _, td := range todos {
+		bc := t.TextMuted
+		if td.done {
+			bc = t.Success
+		}
+		tc := t.Text
+		if td.done {
+			tc = t.TextMuted
+		}
+		drawNode(rightX, td.y, todoW, nodeH, td.title, bc, tc)
+	}
+}
+
+// layVertical 把 n 个节点在 [pad, h-pad] 上均匀分布，回调拿到第 i 个的中心 y。
+func layVertical(n int, pad, h float32, fn func(i int, y float32)) {
+	if n <= 0 {
+		return
+	}
+	usable := h - 2*pad
+	step := usable / float32(n)
+	for i := 0; i < n; i++ {
+		fn(i, pad+step*(float32(i)+0.5))
+	}
+}
+
+// layVerticalIdx 同上，但调用方在回调里按 i 取真实数据，避免闭包捕获切片问题。
+func layVerticalIdx(n int, pad, h float32, fn func(i int, y float32)) {
+	layVertical(n, pad, h, fn)
+}
+
+// anchorKey / parseAnchorKey 把（锚点 id, 是否项目）编码成 map key 再解出来，
+// 避免引入结构化 key 类型。
+func anchorKey(id int64, isProj bool) string {
+	if isProj {
+		return "P" + fmt.Sprintf("%d", id)
+	}
+	return "R" + fmt.Sprintf("%d", id)
+}
+
+func parseAnchorKey(k string) (isProj bool, id int64) {
+	if len(k) == 0 {
+		return false, 0
+	}
+	isProj = k[0] == 'P'
+	v, err := strconv.ParseInt(k[1:], 10, 64)
+	if err != nil {
+		return false, 0
+	}
+	id = v
+	return
+}
+
+func anchorOfKey(k string) int64 { _, id := parseAnchorKey(k); return id }
+func isProjOfKey(k string) bool  { p, _ := parseAnchorKey(k); return p }
+
+// projectIDOfRepo 从快照取某仓库的归属项目 id（找不到返回 0 = 未归属）。
+func projectIDOfRepo(d *atlasCache, repoID int64) int64 {
+	for _, r := range d.repos {
+		if r.ID == repoID {
+			return r.ProjectID
+		}
+	}
+	return 0
+}
+
+// truncateLabel 超长标签裁掉并加省略号，避免节点文字溢出。
+func truncateLabel(s string, n int) string {
+	r := []rune(s)
+	if n <= 1 {
+		if len(r) == 0 {
+			return ""
+		}
+		return string(r[0:1])
+	}
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 // forgePlatforms 导入弹窗里可选的平台。

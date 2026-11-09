@@ -219,6 +219,15 @@ type App struct {
 	stickyApplied bool         // 已应用的开关状态
 	stickyTopTop  bool         // 已应用的「始终置顶」状态
 	stickyPollAt  time.Time    // 上次记录窗口位置
+	// stickySizeW / stickySizeH 便签窗口当前尺寸（resize 手柄拖动后更新；
+	// 折叠为小方块时改用 stickyMiniSize，展开后恢复这两个值）。
+	stickySizeW int
+	stickySizeH int
+	// stickyLastInteract 最后与便签交互的时刻（悬停 / 点击 / 拖动 / resize）；
+	// 超过 stickyIdleTimeout 没有交互就折叠成小方块。
+	stickyLastInteract time.Time
+	// stickyMini 是否已折叠成小方块（仅显示待办总数，点击恢复）。
+	stickyMini bool
 
 	// ---- 基本信息页的运行时快照 ----
 	env envSnapshot
@@ -367,6 +376,9 @@ func newApp(s *settings.Settings) *App {
 	a.petSavedXP = s.PetXP
 	a.petStage = pet.Stage(s.PetXP)
 	a.petLastBreak = time.Now()
+	// 便签初始尺寸（resize 手柄会改写；折叠小方块时临时替换）。
+	a.stickySizeW = stickyW
+	a.stickySizeH = stickyH
 	a.closeModeIdx = closeModeIdxOf(s.CloseMode)
 	a.appliedCloseModeIdx = a.closeModeIdx
 	a.appliedFontPx = math.Round(s.FontSize)

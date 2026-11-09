@@ -92,6 +92,8 @@ func navRegistry() []navGroup {
 			{id: "projects", label: "项目", icon: icons.IdCard, build: (*App).projectPage,
 				policy: pagePolicy{keep: keepCached},
 				tools: []toolAction{
+					{icon: icons.Share2, label: "关系图谱", tip: "查看项目 / 仓库 / 待办的关系图谱",
+						run: func(a *App) { a.openGraphDialog() }},
 					{icon: icons.Package, label: "新建项目", tip: "新建一个项目",
 						run: func(a *App) { a.openProjectDialog(store.Project{}) }},
 				}},
