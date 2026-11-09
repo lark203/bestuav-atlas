@@ -103,6 +103,8 @@ type App struct {
 	viewportGen  atomic.Int64
 	// viewportReleases 自动回收的执行次数（测试与诊断用）。
 	viewportReleases atomic.Int64
+	// confirmRebuildAt 是「重建渲染缓存」第一次点击的时刻（二次确认用，见 memory.go）。
+	confirmRebuildAt time.Time
 
 	// 浮层不透明度（0.2–1.0）：设置背景图后侧栏/内容区半透明，背景图透出。
 	// 未设置背景图时恒为不透明，保持主题默认外观。

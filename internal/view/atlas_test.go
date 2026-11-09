@@ -610,6 +610,45 @@ func TestViewportSettleReleasesMemory(t *testing.T) {
 	}
 }
 
+// TestRebuildRenderCacheTwoStep 「重建渲染缓存」要两次点击才执行，且会清页面缓存后重启。
+func TestRebuildRenderCacheTwoStep(t *testing.T) {
+	a, st := newTestApp(t)
+	pid, _ := seedAtlas(t, a, st)
+	a.page = "repos"
+	if tt := ui.NewTester(a.View, 900, 600); tt != nil {
+		tt.Frame()
+	}
+	a.pages["todos"] = &pageState{born: time.Now(), lastSeen: time.Now(), data: map[string]any{"cache": 1}}
+	a.atlasUI.graph.hits = []graphHit{{kind: gkProject, id: pid, label: "星图"}}
+
+	called := 0
+	oldRelaunch := relaunchApp
+	relaunchApp = func() { called++ }
+	defer func() { relaunchApp = oldRelaunch }()
+
+	a.onRebuildClicked()
+	if called != 0 {
+		t.Fatal("第一次点击不应直接重启")
+	}
+	if a.confirmRebuildAt.IsZero() {
+		t.Fatal("第一次点击应进入待确认状态")
+	}
+
+	a.onRebuildClicked()
+	if called != 1 {
+		t.Fatalf("第二次点击应重启一次，实际 %d", called)
+	}
+	if len(a.pages) != 0 {
+		t.Errorf("页面运行时缓存应被清空，实际还剩 %d 个", len(a.pages))
+	}
+	if len(a.atlasUI.graph.hits) != 0 {
+		t.Error("拓扑画布缓存应被释放")
+	}
+	if !a.confirmRebuildAt.IsZero() {
+		t.Error("确认状态应复位")
+	}
+}
+
 // TestClearPrefsDropsPageCaches 「清理页面状态」不只清 page_pref，还要丢其它页面的
 // 运行时缓存（这正是之前「看不出效果」的原因），当前页保持不动。
 func TestClearPrefsDropsPageCaches(t *testing.T) {

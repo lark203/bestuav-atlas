@@ -258,6 +258,16 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 					}
 				})
 
+				// 渲染缓存：mygo 的文字/蒙版图集是进程级缓存，只能靠重启换一个干净的渲染器。
+				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Margin(6, 0, 0, 0).Children(func() {
+					ui.Text(c, "渲染缓存（文字/蒙版图集、场景缓存）不会随页面销毁缩回；"+
+						"重建会清空页面运行时缓存并重启应用，引擎缓存随之重建。页面偏好与数据不受影响。").
+						TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+					if ui.Button(c, "重建渲染缓存").Clicked() {
+						a.onRebuildClicked()
+					}
+				})
+
 				// 配置与数据：换机 / 备份 / 三台电脑之间搬运（见 internal/profile）。
 				ui.Text(c, "配置与数据").Bold().Margin(8, 0, 0, 0)
 				ui.Text(c, "换机时在旧机器导出、新机器导入即可复用设置、任务、授权与页面状态；"+

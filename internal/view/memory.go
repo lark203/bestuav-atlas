@@ -9,6 +9,8 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/egoist/mygo"
+
 	"bestuav-atlas/internal/logging"
 )
 
@@ -95,4 +97,49 @@ func (a *App) releaseMemoryNow() {
 		return
 	}
 	a.toast(fmt.Sprintf("已归还 %.1f MB 给系统", released))
+}
+
+// ---- 重建渲染缓存 ----
+
+// relaunchApp 是「重启应用」的可替换入口：生产代码走 mygo 的 Relaunch，
+// 测试里换成计数闭包，避免测试进程真的退出。
+var relaunchApp = func() { mygo.App.Relaunch() }
+
+// rebuildConfirmWindow 二次确认的有效期：超时未确认就当没点过。
+const rebuildConfirmWindow = 5 * time.Second
+
+// onRebuildClicked 处理「重建渲染缓存」按钮：两次点击才真正执行。
+//
+// 第一次点击只记下时间并提示后果；5 秒内再点一次才清缓存并重启。
+// 这样既不弹模态框打断设置页，也不会误触后直接丢未保存内容。
+func (a *App) onRebuildClicked() {
+	now := time.Now()
+	if !a.confirmRebuildAt.IsZero() && now.Sub(a.confirmRebuildAt) <= rebuildConfirmWindow {
+		a.confirmRebuildAt = time.Time{}
+		a.rebuildRenderCache()
+		return
+	}
+	a.confirmRebuildAt = now
+	a.toast("再点一次「重建渲染缓存」确认重启；未保存的输入会丢失")
+}
+
+// rebuildRenderCache 丢弃页面运行时缓存并重启应用。
+//
+// 为什么必须重启：文字/蒙版图集与场景缓存都挂在 mygo 的进程级渲染器上，
+// 没有公开 API 能就地缩回；重启 = 换一个全新的渲染器，图集与纹理缓存随之重建。
+// 页面偏好（page_pref）是用户数据，不清；这里只清「可以随时丢」的运行时缓存。
+func (a *App) rebuildRenderCache() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	pages, prefs := len(a.pages), a.prefCount()
+	a.pages = make(map[string]*pageState)
+	a.prefMem = nil
+	a.releaseGraphBuffers()
+	logging.Audit("app", "重建渲染缓存（重启应用）",
+		"cachedPages", pages,
+		"pagePrefs", prefs,
+		"heapMB", fmt.Sprintf("%.1f", float64(m.HeapAlloc)/(1<<20)),
+		"sysMB", fmt.Sprintf("%.1f", float64(m.Sys)/(1<<20)))
+	a.persist()
+	relaunchApp()
 }
