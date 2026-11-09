@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -488,6 +489,96 @@ func TestMonthStats(t *testing.T) {
 	}
 	if nov.Created != 2 || nov.Done != 1 || nov.Overdue != 1 {
 		t.Errorf("11 月统计不对：%+v", nov)
+	}
+}
+
+// TestGraphZoomAnchoredAtPointer 滚轮缩放以鼠标位置为锚点：该点下方的世界坐标不动。
+func TestGraphZoomAnchoredAtPointer(t *testing.T) {
+	g := graphView{zoom: 1, panX: 30, panY: -20, w: 800, h: 600}
+	mx, my := float32(520), float32(140)
+	wx := (mx - g.panX) / g.zoom
+	wy := (my - g.panY) / g.zoom
+
+	g.zoomAt(mx, my, 1.6)
+	if g.zoom != 1.6 {
+		t.Fatalf("缩放后 zoom 应为 1.6，实际 %v", g.zoom)
+	}
+	sx, sy := g.screen(wx, wy)
+	if float32(math.Abs(float64(sx-mx))) > 0.01 || float32(math.Abs(float64(sy-my))) > 0.01 {
+		t.Errorf("锚点漂移了：世界点 (%v,%v) 缩放后落在 (%v,%v)，应在 (%v,%v)", wx, wy, sx, sy, mx, my)
+	}
+}
+
+// TestGraphZoomClamped 缩放有上下限，按钮连点也不会越界。
+func TestGraphZoomClamped(t *testing.T) {
+	g := graphView{zoom: 1, w: 400, h: 300}
+	for i := 0; i < 40; i++ {
+		g.zoomCenter(1.25)
+	}
+	if g.zoom > graphZoomMax+0.001 {
+		t.Errorf("放大超过上限：%v", g.zoom)
+	}
+	for i := 0; i < 80; i++ {
+		g.zoomCenter(1 / 1.25)
+	}
+	if g.zoom < graphZoomMin-0.001 {
+		t.Errorf("缩小低于下限：%v", g.zoom)
+	}
+}
+
+// TestProjectTopologyDirectEdges 每个子节点一条自己的边（0 → 子节点），
+// 不是共用一条线段再分叉。
+func TestProjectTopologyDirectEdges(t *testing.T) {
+	a, st := newTestApp(t)
+	pid, _ := seedAtlas(t, a, st)
+	d := a.atlas()
+
+	var th *ui.Theme
+	if tt := ui.NewTester(func(c *ui.Context) { th = c.Theme() }, 40, 40); tt != nil {
+		tt.Frame()
+	}
+	nodes, edges := projectTopologyGraph(th, "星图", d.projectRepos(pid), d.projectTodos(pid))
+	if len(nodes) < 2 {
+		t.Skip("没有子节点")
+	}
+	if len(edges) != len(nodes)-1 {
+		t.Fatalf("边数应等于子节点数 %d，实际 %d", len(nodes)-1, len(edges))
+	}
+	seen := map[int]bool{}
+	for _, e := range edges {
+		if e[0] != 0 {
+			t.Errorf("边应从项目（0）出发，实际 %v", e)
+		}
+		if e[1] <= 0 || e[1] >= len(nodes) {
+			t.Errorf("边的子节点下标越界：%v", e)
+		}
+		if seen[e[1]] {
+			t.Errorf("子节点 %d 有多条边", e[1])
+		}
+		seen[e[1]] = true
+	}
+}
+
+// TestTopologyWheelZoom 在拓扑页上滚轮确实会缩放画布（走 HandleInput 的滚动事件）。
+func TestTopologyWheelZoom(t *testing.T) {
+	a, st := newTestApp(t)
+	pid, _ := seedAtlas(t, a, st)
+	a.openProjectGraph(pid)
+
+	tt := ui.NewTester(a.View, 1200, 800)
+	tt.Frame()
+	before := a.atlasUI.graph.zoom
+	tt.Wheel(760, 520, 0, -120) // 向上滚 = 放大
+	tt.Frame()
+	if a.atlasUI.graph.zoom <= before {
+		t.Fatalf("滚轮向上后应放大：before=%v after=%v", before, a.atlasUI.graph.zoom)
+	}
+	up := a.atlasUI.graph.zoom
+
+	tt.Wheel(760, 520, 0, 240) // 向下滚 = 缩小
+	tt.Frame()
+	if a.atlasUI.graph.zoom >= up {
+		t.Errorf("滚轮向下后应缩小：before=%v after=%v", up, a.atlasUI.graph.zoom)
 	}
 }
 

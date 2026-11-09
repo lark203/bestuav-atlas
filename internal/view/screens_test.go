@@ -128,6 +128,19 @@ func TestScreenshots(t *testing.T) {
 		save("atlas-repo-detail")
 	}
 
+	// 拓扑图：项目在正中、仓库/待办发散；同一张图放大 1.6 倍再截一张。
+	a.openProjectGraph(1)
+	save("atlas-topology")
+	a.atlasUI.graph.zoom = 1.6
+	a.atlasUI.graph.panX, a.atlasUI.graph.panY = -110, -70
+	save("atlas-topology-zoom")
+	a.atlasUI.graph.reset()
+
+	// 全量关系图谱：所有项目 / 仓库 / 待办一起看。
+	a.openGraphDialog()
+	save("atlas-graph-all")
+	a.atlasUI.graph.reset()
+
 	// 仓库页：选中两个仓库时的批量条（含批量删除）。
 	if repos2, err := st.ListRepos(); err == nil && len(repos2) > 0 {
 		a.atlasUI.sel = map[int64]bool{repos2[0].ID: true}

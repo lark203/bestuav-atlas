@@ -40,6 +40,8 @@ type atlasUI struct {
 
 	// graphProject 关系图谱弹窗的作用域：0 = 全量总览；>0 = 只看该项目的拓扑图。
 	graphProject int64
+	// graph 是拓扑画布的缩放 / 平移 / 悬停状态（见 graph_canvas.go）。
+	graph graphView
 
 	// ---- 仓库页 ----
 	sel         map[int64]bool
@@ -174,12 +176,14 @@ func (a *App) openImportDialog() {
 // openGraphDialog 进入「关系图谱」整页：全部项目 / 仓库 / 待办的总览。
 func (a *App) openGraphDialog() {
 	a.atlasUI.graphProject = 0
+	a.atlasUI.graph.reset()
 	a.page = "topology"
 }
 
 // openProjectGraph 进入某个项目的「拓扑图」整页：项目在正中、仓库/待办围绕它发散。
 func (a *App) openProjectGraph(projectID int64) {
 	a.atlasUI.graphProject = projectID
+	a.atlasUI.graph.reset()
 	a.page = "topology"
 }
 
@@ -592,18 +596,37 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 	pid := a.atlasUI.graphProject
 
 	ui.Column(c).Gap(kit.PageGap).Children(func() {
+		g := &a.atlasUI.graph
 		// ---- 标题行（返回键由页头 pageLeading 统一画）----
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
 			if pid != 0 {
 				ui.Text(c, d.projectName(pid)).FontSize(22).Bold().SingleLine()
 				ui.Text(c, "中心是本项目，周围是它的仓库与待办").
-					FontSize(t.FontSize-2).TextColor(t.TextMuted)
+					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 			} else {
 				ui.Text(c, "关系图谱").FontSize(22).Bold().SingleLine()
 				ui.Text(c, "每个圆点是一个项目 / 仓库 / 待办；连线表示归属").
-					FontSize(t.FontSize-2).TextColor(t.TextMuted)
+					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+			}
+			ui.Text(c, "").Grow(1)
+			// 缩放：滚轮以鼠标为中心；按钮以画布中心为锚点。
+			if smallButton(c, "−").Clicked() {
+				g.zoomCenter(1 / 1.25)
+				a.requestFrame()
+			}
+			ui.Text(c, fmt.Sprintf("%d%%", int(g.zoom*100+0.5))).
+				Width(46).FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+			if smallButton(c, "+").Clicked() {
+				g.zoomCenter(1.25)
+				a.requestFrame()
+			}
+			if ui.Button(c, "重置视图").Clicked() {
+				g.reset()
+				a.requestFrame()
 			}
 		})
+		ui.Text(c, "滚轮以鼠标位置为中心缩放 · 拖动空白处平移 · 悬停节点看完整名称").
+			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 
 		if pid == 0 {
 			if len(d.projects) == 0 && len(d.repos) == 0 && len(d.todos) == 0 {
@@ -624,7 +647,13 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 			graphH = 360
 		}
 		ui.Box(c).Height(float32(graphH)).Children(func() {
-			ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).Draw(func(p *ui.Painter, r ui.Rect) {
+			area := ui.Box(c).Absolute().Top(0).Left(0).Right(0).Bottom(0).
+				Cursor(ui.CursorGrab).HandleInput(a.graphCanvasInput)
+			// 指针位置要在 Draw 之前取：它同时负责「悬停时请求新帧」。
+			mx, my, over := area.PointerPosition()
+			g.hasPointer = over
+			g.pointerX, g.pointerY = mx, my
+			area.Draw(func(p *ui.Painter, r ui.Rect) {
 				if pid != 0 {
 					a.drawProjectTopology(p, r, t, d.projectName(pid), d.projectRepos(pid), d.projectTodos(pid))
 				} else {
@@ -651,13 +680,17 @@ type graphNode struct {
 	x, y  float32 // 由布局函数填充（画布内局部坐标）
 }
 
-// drawProjectTopology 项目拓扑：以该项目为中枢，仓库与待办作为周围节点。
-func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) {
+// projectTopologyGraph 把「一个项目 + 它的仓库/待办」变成节点与连线。
+//
+// 连线的关键约定：**每条边都是 0 → 子节点**，也就是每个仓库/待办都从项目中心
+// 直接连出去一条自己的线；不存在「先连到一个中间点再分叉」的共享线段。
+// 渲染层再给每条边一点弯曲，所以中枢附近不会叠成一根粗线。
+func projectTopologyGraph(t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) ([]graphNode, [][2]int) {
+	const capEach = 24 // 节点太多会糊成一团，超量截断（先在项目卡上看到总数）
 	nodes := make([]graphNode, 0, 1+len(repos)+len(todos))
 	nodes = append(nodes, graphNode{label: projectName, color: t.Accent, r: 9, hub: true})
 	edges := make([][2]int, 0, len(repos)+len(todos))
 
-	const capEach = 24 // 节点太多会糊成一团，超量截断（先在项目卡上看到总数）
 	rs := repos
 	if len(rs) > capEach {
 		rs = rs[:capEach]
@@ -680,6 +713,12 @@ func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, project
 		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5})
 		edges = append(edges, [2]int{0, idx})
 	}
+	return nodes, edges
+}
+
+// drawProjectTopology 项目拓扑：以该项目为中枢，仓库与待办作为周围节点。
+func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) {
+	nodes, edges := projectTopologyGraph(t, projectName, repos, todos)
 	a.drawNodeGraph(p, r, t, nodes, edges, false)
 }
 
@@ -820,8 +859,11 @@ func forceLayout(nodes []graphNode, edges [][2]int, w, h, pad float32) {
 }
 
 // radialCenterLayout 以 nodes[0] 为中心、其余节点在椭圆环上均分角度的放射布局：
-// 项目在正中，仓库与待办围绕它「发散」。椭圆横/纵半径按画布比例取，宽页面也能铺开。
-// 叶子较多时用内外两圈交替，避免一个圈挤太多、标签打架。
+// 项目在正中，仓库与待办围绕它「发散」。
+//
+// 半径跟叶子数量走：3 个节点时不该铺满整块画布（那样线拉得又长又稀），
+// 20 个节点时又要铺得开。所以取「按数量估的环半径」和「画布可用半径」的较小值。
+// 叶子很多时用内外两圈交替，避免一个圈挤太多、标签打架。
 func radialCenterLayout(nodes []graphNode, w, h float32) {
 	if len(nodes) == 0 {
 		return
@@ -832,13 +874,21 @@ func radialCenterLayout(nodes []graphNode, w, h float32) {
 	if leaves <= 0 {
 		return
 	}
-	rx := w/2 - 120
-	ry := h/2 - 70
+	// 环半径：每个叶子大约占 26px 弧长，太少时保底 170。
+	ring := 170 + float32(leaves)*26
+	rx := ring * 1.25
+	ry := ring
+	if maxRx := w/2 - 110; rx > maxRx {
+		rx = maxRx
+	}
+	if maxRy := h/2 - 70; ry > maxRy {
+		ry = maxRy
+	}
 	if rx < 140 {
 		rx = 140
 	}
-	if ry < 110 {
-		ry = 110
+	if ry < 120 {
+		ry = 120
 	}
 	twoRings := leaves > 16
 	for i := 1; i < len(nodes); i++ {
@@ -936,7 +986,9 @@ func clampNodesToCanvas(nodes []graphNode, w, h float32) {
 	}
 }
 
-// drawNodeGraph 用 Obsidian 风格画节点图：细线 + 小圆点 + 点下方居中标签。
+// drawNodeGraph 用 Obsidian 风格画节点图：弧线 + 小圆点 + 点下方居中标签，
+// 支持缩放 / 平移 / 悬停高亮。
+//
 // ring=true 用同心环布局（项目内圈 / 仓库中圈 / 待办外圈，按下标等分角度），
 // 适合节点多的「全量关系图」；ring=false 用放射布局（nodes[0] 居中、其余围绕它
 // 发散），适合「项目在正中、仓库/待办围着它」的项目拓扑。
@@ -944,39 +996,139 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 	if len(nodes) == 0 {
 		return
 	}
-	const nodeFont float32 = 11
-	const labelMax float32 = 108
 	const pad float32 = 30
+	g := &a.atlasUI.graph
+	g.w, g.h = r.W, r.H
+	g.ensure()
+
 	if ring {
+		// 全量关系图：项目内圈 / 仓库中圈 / 待办外圈。力导向在节点少时会拉成
+		// 几团、标签互相压住，同心环在这份数据规模下更稳定、也更容易读层级。
 		ringLayout(nodes, r.W, r.H, pad)
 	} else {
 		// 项目拓扑：nodes[0] 是项目，摆正中；其余节点在椭圆环上均分角度围绕它发散。
 		radialCenterLayout(nodes, r.W, r.H)
 	}
 
-	// 连线（先画，压在圆点下面）
-	edgeCol := t.Border
-	for _, e := range edges {
+	// 世界坐标 → 屏幕坐标（缩放 + 平移在这里一次性算好）。
+	pts := make([][2]float32, len(nodes))
+	for i := range nodes {
+		x, y := g.screen(nodes[i].x, nodes[i].y)
+		pts[i] = [2]float32{x, y}
+	}
+
+	// 悬停：屏幕坐标里找最近的节点。判定半径跟着缩放走，放大后更好点中。
+	g.hover = -1
+	if g.hasPointer {
+		best := float32(1e9)
+		for i := range nodes {
+			d := float32(math.Hypot(float64(pts[i][0]-g.pointerX), float64(pts[i][1]-g.pointerY)))
+			if d > nodes[i].r*g.zoom+10 {
+				continue
+			}
+			if d < best {
+				best, g.hover = d, i
+			}
+		}
+	}
+	adjacent := make(map[int]bool, 8)
+	if g.hover >= 0 {
+		for _, e := range edges {
+			switch g.hover {
+			case e[0]:
+				adjacent[e[1]] = true
+			case e[1]:
+				adjacent[e[0]] = true
+			}
+		}
+	}
+
+	a.drawGraphGrid(p, r, t, g)
+
+	// 连线（先画，压在圆点下面）。每条边一条独立曲线：同中枢的多条线不会叠成一条。
+	for k, e := range edges {
 		if e[0] < 0 || e[1] < 0 || e[0] >= len(nodes) || e[1] >= len(nodes) {
 			continue
 		}
-		p.Line(r.X+nodes[e[0]].x, r.Y+nodes[e[0]].y,
-			r.X+nodes[e[1]].x, r.Y+nodes[e[1]].y, 1, edgeCol)
-	}
-	// 节点：背景色光晕 + 实心圆点 + 居中标签
-	for _, nd := range nodes {
-		cx, cy := r.X+nd.x, r.Y+nd.y
-		halo := ui.Rect{X: cx - nd.r - 2, Y: cy - nd.r - 2, W: (nd.r + 2) * 2, H: (nd.r + 2) * 2}
-		p.Fill(halo, t.Background, nd.r+2) // 光晕：线条不贴在点上
-		dot := ui.Rect{X: cx - nd.r, Y: cy - nd.r, W: nd.r * 2, H: nd.r * 2}
-		p.Fill(dot, nd.color, nd.r)
-		label := truncateToPx(nd.label, labelMax, nodeFont)
-		lw := measureText(label, nodeFont)
-		col := t.TextMuted
-		if nd.hub {
-			col = t.Text
+		col := kit.Alpha(t.Border, 1)
+		width := clampFloat(1.25*g.zoom, 0.9, 2.6)
+		if g.hover >= 0 {
+			if e[0] == g.hover || e[1] == g.hover {
+				col = kit.Alpha(t.Accent, 0.95)
+				width = clampFloat(2*g.zoom, 1.3, 3.2)
+			} else {
+				col = kit.Alpha(t.Border, 0.35)
+			}
 		}
-		p.Text(cx-lw/2, cy+nd.r+3, label, nodeFont, col)
+		// 相邻边交替朝两弯：从同一个中枢出发的多条线因此散成扇形，而不是一根粗线。
+		bend := float32(0.11)
+		if k%2 == 1 {
+			bend = -bend
+		}
+		graphCurve(p,
+			r.X+pts[e[0]][0], r.Y+pts[e[0]][1], clampFloat(nodes[e[0]].r*g.zoom, 2.5, 24),
+			r.X+pts[e[1]][0], r.Y+pts[e[1]][1], clampFloat(nodes[e[1]].r*g.zoom, 2.5, 24),
+			bend, width, col)
+	}
+
+	// 节点：背景色光晕 + 实心圆点 + 居中标签；悬停的放大、显示完整名称。
+	for i := range nodes {
+		nd := &nodes[i]
+		cx, cy := r.X+pts[i][0], r.Y+pts[i][1]
+		rr := clampFloat(nd.r*g.zoom, 2.5, 24)
+		dim := g.hover >= 0 && i != g.hover && !adjacent[i]
+		col := nd.color
+		if dim {
+			col = kit.Alpha(col, 0.45)
+		}
+		halo := ui.Rect{X: cx - rr - 2, Y: cy - rr - 2, W: (rr + 2) * 2, H: (rr + 2) * 2}
+		p.Fill(halo, kit.Alpha(t.Background, 0.92), rr+2) // 光晕：线条不贴在点上
+		dot := ui.Rect{X: cx - rr, Y: cy - rr, W: rr * 2, H: rr * 2}
+		p.Fill(dot, col, rr)
+		if i == g.hover {
+			ring := ui.Rect{X: cx - rr - 3, Y: cy - rr - 3, W: (rr + 3) * 2, H: (rr + 3) * 2}
+			p.Stroke(ring, kit.Alpha(t.Accent, 0.9), rr+3, 1.5)
+		}
+
+		font := clampFloat(12*g.zoom, 8, 20)
+		labelMax := 150 * g.zoom
+		label := truncateToPx(nd.label, labelMax, font)
+		if i == g.hover {
+			label = nd.label // 悬停时给全名，不再省略
+		}
+		lw := measureText(label, font)
+		lcol := t.TextMuted
+		if nd.hub {
+			lcol = t.Text
+		}
+		if dim {
+			lcol = kit.Alpha(lcol, 0.5)
+		}
+		p.Text(cx-lw/2, cy+rr+3, label, font, lcol)
+	}
+}
+
+// drawGraphGrid 画一层很淡的点阵：缩放 / 平移时有参照，不至于「什么都没动」。
+// 点距跟着缩放走，太密或太稀时夹在合理区间。
+func (a *App) drawGraphGrid(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView) {
+	step := clampFloat(28*g.zoom, 16, 64)
+	if step <= 0 {
+		return
+	}
+	// 点阵用「次要文字色 + 低透明度」：比边框色更耐看，缩放/平移时有参照物。
+	col := kit.Alpha(t.TextMuted, 0.22)
+	x0 := float32(math.Mod(float64(g.panX), float64(step)))
+	y0 := float32(math.Mod(float64(g.panY), float64(step)))
+	if x0 > 0 {
+		x0 -= step
+	}
+	if y0 > 0 {
+		y0 -= step
+	}
+	for y := y0; y < r.H; y += step {
+		for x := x0; x < r.W; x += step {
+			p.Fill(ui.Rect{X: r.X + x, Y: r.Y + y, W: 2, H: 2}, col, 1)
+		}
 	}
 }
 
