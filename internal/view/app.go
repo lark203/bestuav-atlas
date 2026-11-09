@@ -259,7 +259,9 @@ type App struct {
 	demoTable               ui.ListState
 	demoSel                 int
 	demoTab, demoSeg        int
-	demoCollapse            bool
+	// split 主从示例的左栏宽度：拖动分隔线后跨帧保留。
+	split        shell.SplitState
+	demoCollapse bool
 
 	// ---- CrychicUI 对照页状态（datetime / code 包；不改动任何原有页面）----
 	cryPick, cryMini, cryNav, cryHeatFrom time.Time
@@ -1079,16 +1081,19 @@ func (a *App) shell(c *ui.Context, t *ui.Theme) {
 		})
 
 	// 轻量任务执行时，标题右侧显示任务名（与分割线槽位里的进度条呼应）。
-	subtitle := ""
-	if a.taskRunning && a.taskLabel != "" {
-		subtitle = a.taskLabel
-	}
+	subtitle := a.pageSubtitle()
+	tabs, tabIdx, onTab := a.pageTabs()
 	shell.Content(c, t, shell.ContentOptions{
 		Title:      pageTitle(a.page),
 		Subtitle:   subtitle,
 		Leading:    a.pageLeading(c, t),
+		Extras:     a.pageExtras(c, t),
+		Tabs:       tabs,
+		Tab:        tabIdx,
+		OnTab:      onTab,
 		Tools:      func() { a.headerTools(c, t) },
 		Body:       func() { a.pageBody(c, t) },
+		Fill:       a.pageFill(),
 		Scroll:     a.ScrollFor(a.page),
 		Running:    a.taskRunning,
 		Progress:   a.taskProgress,

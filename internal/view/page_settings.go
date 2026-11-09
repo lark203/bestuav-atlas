@@ -24,19 +24,13 @@ import (
 // （通过对比各绑定值与其“已应用”快照）。
 func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Gap(kit.PageGap).Children(func() {
-		// 分组：一次只渲染一组。
+		// 分组：一次只渲染一组。分组切换在页头 tab（见 header_layout.go），
+		// 这里只读当前组；控件写回仍走 a.setSettingsGroup。
 		//
 		// 为什么不是「长列表 + 折叠」：实测这页的耗时由「可见内容的绘制」驱动——
 		// 视口 720 → 1400（可见内容变多）时 2.78ms → 4.03ms，而把折叠线以下的
 		// 两块折叠起来几乎不改变耗时。只有真正减少「同时画多少」，帧时间才会降。
-		//
-		// group 取的是局部副本，控件写回后再比对持久化：这样分组状态存在页面私有
-		// 状态里，不必往 App 结构体加字段（见 app_structure_test.go 的约束）。
 		group := a.settingsGroup()
-		ui.Segmented(c, &group, settingsGroupLabels()...)
-		if group != a.settingsGroup() {
-			a.setSettingsGroup(group)
-		}
 		general := group == settingsGroupGeneral
 		workspace := group == settingsGroupWorkspace
 		shortcuts := group == settingsGroupShortcuts

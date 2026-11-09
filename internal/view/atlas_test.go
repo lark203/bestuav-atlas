@@ -16,6 +16,7 @@ import (
 	"bestuav-atlas/internal/gitx"
 	"bestuav-atlas/internal/settings"
 	"bestuav-atlas/internal/store"
+	"bestuav-atlas/internal/view/shell"
 )
 
 // 这组测试守的是「三块业务页面能画出来、能读到自己写进去的数据」。
@@ -806,6 +807,178 @@ func TestQuadPointEnds(t *testing.T) {
 	x, y = quadPoint(10, 20, 50, 60, 90, 20, 1)
 	if x != 90 || y != 20 {
 		t.Errorf("t=1 应为终点 (90,20)，实际 (%v,%v)", x, y)
+	}
+}
+
+// TestHeaderExtrasKeepHeaderHeight 页头 Extras 再高也不能改变页头高度：
+// 正文起始位置应仍在 52px 页头 + 3px 分割线附近。
+func TestHeaderExtrasKeepHeaderHeight(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		shell.Content(c, c.Theme(), shell.ContentOptions{
+			Title: "标题",
+			Extras: func() {
+				ui.Box(c).Width(40).Height(200) // 故意比页头高
+			},
+			Fill: true,
+			Body: func() {
+				ui.Text(c, "正文起点").Padding(0, 0)
+			},
+		})
+	}, 800, 400)
+	tt.Frame()
+	r, ok := tt.Find("正文起点")
+	if !ok {
+		t.Fatal("找不到正文")
+	}
+	if r.Y > shell.HeaderHeight+12 {
+		t.Errorf("正文被 Extras 推下去了：y=%.0f（页头应固定 %d）", r.Y, shell.HeaderHeight)
+	}
+}
+
+// TestHeaderTabsHideSubtitle 有 tab 时不显示副标题，但 Extras / 工具条仍保留。
+func TestHeaderTabsHideSubtitle(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		shell.Content(c, c.Theme(), shell.ContentOptions{
+			Title:    "标题",
+			Subtitle: "副标题不该出现",
+			Extras:   func() { ui.Text(c, "页头组件") },
+			Tabs:     []string{"A", "B"},
+			Tab:      0,
+			Fill:     true,
+			Body:     func() { ui.Text(c, "正文") },
+		})
+	}, 900, 400)
+	tt.Frame()
+	if tt.HasText("副标题不该出现") {
+		t.Error("有 tab 时不应渲染副标题")
+	}
+	if !tt.HasText("页头组件") {
+		t.Error("有 tab 时仍应保留页头组件")
+	}
+}
+
+// TestLayoutTabsPageSwitches 页头 tab 点击切换正文（tab 由 shell 渲染）。
+func TestLayoutTabsPageSwitches(t *testing.T) {
+	a, st := newTestApp(t)
+	seedAtlas(t, a, st)
+	a.page = "layout-tabs"
+	a.demoTab = 0
+	tt := renderPage(t, a, "layout-tabs")
+	if err := tt.Click("明细"); err != nil {
+		t.Fatalf("点击 tab 失败: %v", err)
+	}
+	if a.demoTab != 1 {
+		t.Fatalf("点击「明细」后 demoTab 应为 1，实际 %d", a.demoTab)
+	}
+	tt.Frame()
+	if !tt.HasText("当前 tab") {
+		t.Errorf("切换后正文没有变成明细；文本：%v", tt.Texts())
+	}
+}
+
+// TestHeaderSubtitleBottomAligned 副标题与标题底部对齐（不是垂直居中）。
+func TestHeaderSubtitleBottomAligned(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		shell.Content(c, c.Theme(), shell.ContentOptions{
+			Title:    "标题",
+			Subtitle: "副标题",
+			Fill:     true,
+			Body:     func() {},
+		})
+	}, 600, 200)
+	tt.Frame()
+	tr, ok1 := tt.Find("标题")
+	sr, ok2 := tt.Find("副标题")
+	if !ok1 || !ok2 {
+		t.Fatalf("找不到标题/副标题：%v %v", ok1, ok2)
+	}
+	if d := (tr.Y + tr.H) - (sr.Y + sr.H); d > 1.5 || d < -1.5 {
+		t.Errorf("标题与副标题底部相差 %.1fpx（应底部对齐）", d)
+	}
+}
+
+// TestSplitDragResizes 拖动分隔线调整左右宽度，并受最小/最大范围约束。
+func TestSplitDragResizes(t *testing.T) {
+	a, st := newTestApp(t)
+	seedAtlas(t, a, st)
+	a.page = "layout-split"
+	a.demoSel = 0
+	a.split.Width = 0
+	tt := renderPage(t, a, "layout-split")
+	base := a.split.Width
+	if base != 320 {
+		t.Fatalf("默认左栏宽度应为 320，实际 %.0f", base)
+	}
+	// 分隔线中心：侧栏 220 + 左栏宽 + 手柄一半。
+	x := float32(220) + base + 3
+	tt.Press(x, 400)
+	tt.Frame()
+	tt.Move(x+120, 400)
+	tt.Frame()
+	tt.Release(x+120, 400)
+	tt.Frame()
+	if a.split.Width < base+80 {
+		t.Fatalf("向右拖动后左栏应变宽，实际 %.0f", a.split.Width)
+	}
+	// 拖到最右：不超过 520。
+	tt.Press(float32(220)+a.split.Width+3, 400)
+	tt.Frame()
+	tt.Move(2000, 400)
+	tt.Frame()
+	tt.Release(2000, 400)
+	tt.Frame()
+	if a.split.Width > 520.5 {
+		t.Fatalf("左栏超过最大宽度：%.0f", a.split.Width)
+	}
+	// 拖到最左：不小于 240。
+	tt.Press(float32(220)+a.split.Width+3, 400)
+	tt.Frame()
+	tt.Move(0, 400)
+	tt.Frame()
+	tt.Release(0, 400)
+	tt.Frame()
+	if a.split.Width < 239.5 {
+		t.Fatalf("左栏小于最小宽度：%.0f", a.split.Width)
+	}
+}
+
+// TestLayoutSplitPage 三段式：未选中时右栏为空态，选中后展示详情。
+func TestLayoutSplitPage(t *testing.T) {
+	a, st := newTestApp(t)
+	seedAtlas(t, a, st)
+	a.page = "layout-split"
+	a.demoSel = 0
+	tt := renderPage(t, a, "layout-split")
+	if !tt.HasText("从左侧选择一个项目") {
+		t.Fatalf("未选中时应展示空态提示；文本：%v", tt.Texts())
+	}
+	// 「星图」在侧栏品牌里也有，用列表里唯一的名字点击，避免点到品牌回首页。
+	if err := tt.Click("量子科学桌面端"); err != nil {
+		t.Fatalf("点击左侧卡片失败: %v", err)
+	}
+	if a.demoSel != 2 {
+		t.Fatalf("点击第二项后 demoSel 应为 2，实际 %d", a.demoSel)
+	}
+	tt.Frame()
+	if !tt.HasText("数据来源") {
+		t.Errorf("选中后右栏应展示详情；文本：%v", tt.Texts())
+	}
+}
+
+// TestTopologyPageHeaderSubtitle 拓扑页页头：标题 + 项目副标题，正文不再重复大标题。
+func TestTopologyPageHeaderSubtitle(t *testing.T) {
+	a, st := newTestApp(t)
+	pid, _ := seedAtlas(t, a, st)
+	a.openProjectGraph(pid)
+	tt := renderPage(t, a, "topology")
+	if !tt.HasText("拓扑图") {
+		t.Error("页头应有「拓扑图」标题")
+	}
+	if !tt.HasText(a.atlas().projectName(pid)) {
+		t.Error("页头应展示项目副标题")
+	}
+	if !tt.HasText("滚轮缩放") {
+		t.Error("正文工具条缺失")
 	}
 }
 

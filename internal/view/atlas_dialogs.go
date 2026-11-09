@@ -599,18 +599,11 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 
 	ui.Column(c).Gap(kit.PageGap).Children(func() {
 		g := &a.atlasUI.graph
-		// ---- 标题行（返回键由页头 pageLeading 统一画）----
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Wrap().Children(func() {
-			if pid != 0 {
-				ui.Text(c, d.projectName(pid)).FontSize(22).Bold().SingleLine()
-				ui.Text(c, "中心是本项目，周围是它的仓库与待办").
-					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-			} else {
-				ui.Text(c, "关系图谱").FontSize(22).Bold().SingleLine()
-				ui.Text(c, "每个圆点是一个项目 / 仓库 / 待办；连线表示归属").
-					FontSize(t.FontSize - 2).TextColor(t.TextMuted)
-			}
-			ui.Text(c, "").Grow(1)
+		// 页头已经展示「拓扑图 + 当前项目」与范围下拉框（见 header_layout.go），
+		// 正文只留一条紧凑工具条，避免同一信息在标题栏和正文里各写一遍。
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.Text(c, "滚轮缩放 · 拖动平移 · 单击节点跳转 · 悬停节点发出脉冲（移开即停）").
+				FontSize(t.FontSize - 2).TextColor(t.TextMuted).Grow(1)
 			// 缩放：滚轮以鼠标为中心；按钮以画布中心为锚点。
 			if smallButton(c, "−").Clicked() {
 				g.zoomCenter(1 / 1.25)
@@ -627,8 +620,6 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 				a.requestFrame()
 			}
 		})
-		ui.Text(c, "滚轮以鼠标位置为中心缩放 · 拖动空白处平移 · 单击节点跳转 · 悬停节点发出脉冲（移开即停）").
-			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 
 		if pid == 0 {
 			if len(d.projects) == 0 && len(d.repos) == 0 && len(d.todos) == 0 {

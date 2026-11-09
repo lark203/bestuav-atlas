@@ -116,6 +116,11 @@ func navRegistry() []navGroup {
 
 		// 工具：工程自带的能力，与业务无关。放在最后，不干扰日常路径。
 		{title: "工具", items: []navItem{
+			// 布局示例：验证内容区三种公共样式（页头扩展 / tab / 左右两栏）。
+			{id: "layout-tabs", label: "布局示例 · 标签页", icon: icons.Panel,
+				build: (*App).layoutTabsPage, policy: pagePolicy{keep: keepCached}},
+			{id: "layout-split", label: "布局示例 · 主从", icon: icons.List,
+				build: (*App).layoutSplitPage, policy: pagePolicy{keep: keepCached}},
 			{id: "task", label: "异步任务", icon: icons.Bolt, build: (*App).taskPage,
 				// 任务列表要"切回来还在"，用缓存；闲置 30 分钟再由全局规则带走。
 				// 没有页头工具：任务记录全部由真实动作产生，演示按钮已移除。

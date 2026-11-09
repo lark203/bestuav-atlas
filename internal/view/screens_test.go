@@ -122,6 +122,18 @@ func TestScreenshots(t *testing.T) {
 		}
 	}
 
+	// 布局示例：页头 tab / 左右两栏（空态与选中态）。
+	a.page = "layout-tabs"
+	a.demoTab = 0
+	save("atlas-layout-tabs")
+	a.demoTab = 1
+	save("atlas-layout-tabs-detail")
+	a.page = "layout-split"
+	a.demoSel = 0
+	save("atlas-layout-split-empty")
+	a.demoSel = 1
+	save("atlas-layout-split")
+
 	// 仓库详情页。
 	if r, ok := a.repoByID(detail.ID); ok {
 		a.openRepoDetail(r)
