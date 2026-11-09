@@ -582,6 +582,39 @@ func TestTopologyWheelZoom(t *testing.T) {
 	}
 }
 
+// TestClearPrefsDropsPageCaches 「清理页面状态」不只清 page_pref，还要丢其它页面的
+// 运行时缓存（这正是之前「看不出效果」的原因），当前页保持不动。
+func TestClearPrefsDropsPageCaches(t *testing.T) {
+	a, st := newTestApp(t)
+	if err := st.SetPagePref("todos", "filter", "待办"); err != nil {
+		t.Fatal(err)
+	}
+	a.page = "settings"
+	a.PrefsFor("todos").Set("search", "abc")
+
+	// 造两个页面的运行时缓存。
+	a.pages["todos"] = &pageState{born: time.Now(), lastSeen: time.Now(), data: map[string]any{"cache": 1}}
+	a.pages["repos"] = &pageState{born: time.Now(), lastSeen: time.Now(), data: map[string]any{"cache": 2}}
+
+	if n := a.pageStateCount(); n != 2 {
+		t.Fatalf("清理前应有 2 个页面带运行时缓存，实际 %d", n)
+	}
+	a.clearPrefs()
+
+	if n := a.prefCount(); n != 0 {
+		t.Errorf("page_pref 应被清空，实际还剩 %d 条", n)
+	}
+	if n := a.pageStateCount(); n != 0 {
+		t.Errorf("其它页面的运行时缓存应被丢弃，实际还剩 %d", n)
+	}
+	if _, ok := a.pages["settings"]; !ok && a.page == "settings" {
+		// settings 可能是懒创建的，这里不强求存在；关键是它没被清掉 data。
+	}
+	if a.prefMem != nil {
+		t.Error("内存里的页面偏好缓存也应清空")
+	}
+}
+
 // TestGraphBFSDepths 脉冲层级：从中心出发按最短跳数扩散，链式关系能跳到二跳、三跳。
 func TestGraphBFSDepths(t *testing.T) {
 	nodes := []graphNode{

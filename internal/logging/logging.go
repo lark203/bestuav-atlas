@@ -130,6 +130,21 @@ func Errv(kind, msg string, err error, attrs ...any) {
 	Event(slog.LevelError, kind, msg, append([]any{"err", errText(err)}, attrs...)...)
 }
 
+// Info 记录一条普通信息（只进日志文件，默认级别就可见）。
+//
+// 用于「事后想知道到底执行了哪一步」的关键路径：页面进入/离开/销毁、资源释放、
+// 图谱脉冲等。不追求每帧都写，只在状态变化处写一条，日志量可控。
+func Info(kind, msg string, attrs ...any) {
+	Event(slog.LevelInfo, kind, msg, attrs...)
+}
+
+// Debug 记录一条调试信息（默认级别看不到，--log-level=debug 时可见）。
+//
+// 用于高频但排查时才需要的细节：缩放比例、悬停切换、动画帧等。
+func Debug(kind, msg string, attrs ...any) {
+	Event(slog.LevelDebug, kind, msg, attrs...)
+}
+
 // Warn 记录一条警告（只进日志文件，不入事件库）。
 //
 // 用于「不影响使用、但事后排查时需要知道」的降级路径：托盘创建失败、图标设置

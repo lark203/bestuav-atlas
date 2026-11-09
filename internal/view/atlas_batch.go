@@ -158,6 +158,7 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 	limit := a.asyncLimit()
 	label := fmt.Sprintf("%s（%d 个）", kind.label(), len(repos))
 	started := time.Now()
+	logging.Info("atlas", "开始批量任务", "kind", kind.label(), "repos", len(repos), "limit", limit)
 	a.taskRunning = true
 	a.taskProgress = 0
 	a.taskLabel = label
@@ -229,6 +230,8 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 			if failed > 0 {
 				status = "失败"
 			}
+			logging.Info("atlas", "批量任务结束", "kind", kind.label(),
+				"ok", ok, "failed", failed, "durationMS", time.Since(started).Milliseconds())
 			// 任务队列记「谁发起、跑了多久、出了什么事」：耗时是真实的墙钟时间。
 			detail := fmt.Sprintf("成功 %d / 失败 %d", ok, failed)
 			if failed == 0 {
@@ -557,6 +560,7 @@ func (a *App) startLocalImport(dirs []string, projectID int64) {
 	existing := append([]store.Repo(nil), a.atlas().repos...)
 	label := "从本地导入（" + itoa(len(dirs)) + " 个文件夹）"
 	started := time.Now()
+	logging.Info("atlas", "开始本地导入", "dirs", len(dirs), "project", projectID)
 	// 导入弹窗先关掉：接下来是遮罩的世界，弹窗留在下面没有意义。
 	a.closeAtlasDialog()
 	a.heavyRunning = true
@@ -586,6 +590,8 @@ func (a *App) startLocalImport(dirs []string, projectID int64) {
 			if failed > 0 {
 				status = "失败"
 			}
+			logging.Info("atlas", "本地导入结束", "added", added, "skipped", skipped,
+				"failed", failed, "durationMS", time.Since(started).Milliseconds())
 			detail := "导入 " + itoa(added) + " 个"
 			if skipped > 0 {
 				detail += "，跳过 " + itoa(skipped) + " 个"

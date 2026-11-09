@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"bestuav-atlas/internal/logging"
 )
 
 // 本文件实现「页面生命周期与缓存」，对应 javafx 版 ViewFactory 的那一套：
@@ -100,6 +102,14 @@ func (a *App) enterPage(it navItem, now time.Time) {
 	st := a.pageStat(it.id)
 	st.enters++
 	st.lastSeen = now
+	keep := "cached"
+	if it.policy.keep == keepFresh {
+		keep = "fresh"
+	} else if it.policy.keep == keepPinned {
+		keep = "pinned"
+	}
+	logging.Info("page", "进入页面", "page", it.id, "label", it.label,
+		"enters", st.enters, "keep", keep, "cached", len(st.data))
 	if it.policy.onEnter != nil {
 		it.policy.onEnter(a)
 	}
@@ -114,6 +124,11 @@ func (a *App) leavePage(id string, now time.Time) {
 	if !ok {
 		return
 	}
+	cached := 0
+	if st, ok := a.pages[id]; ok {
+		cached = len(st.data)
+	}
+	logging.Info("page", "离开页面", "page", id, "label", it.label, "cached", cached)
 	if it.policy.onLeave != nil {
 		it.policy.onLeave(a)
 	}
@@ -136,11 +151,16 @@ func (a *App) destroyPage(id string) {
 	}
 	// 取消该页仍在跑的异步加载：pageAsync 的状态实现了 cancelLoad（见 async.go）。
 	// 页面都销毁了，再让后台任务跑完只是白烧 CPU / 占网络。
+	cancelled := 0
 	for _, v := range st.data {
 		if c, ok := v.(interface{ cancelLoad() }); ok {
 			c.cancelLoad()
+			cancelled++
 		}
 	}
+	logging.Info("page", "销毁页面缓存", "page", id, "enters", st.enters,
+		"data", len(st.data), "cancelled", cancelled,
+		"age", time.Since(st.born).Round(time.Second).String())
 	// 丢弃滚动位置与页面数据：这就是「下次进来是全新页面」的含义。
 	st.scroll = ui.ScrollState{}
 	st.data = nil
@@ -178,6 +198,9 @@ func (a *App) evictIdlePages(now time.Time) {
 			continue
 		}
 		if idle := a.pageIdleTTL(it.policy); idle > 0 && now.Sub(st.lastSeen) > idle {
+			logging.Info("page", "闲置超时，销毁页面", "page", id,
+				"idle", now.Sub(st.lastSeen).Round(time.Second).String(),
+				"ttl", idle.String())
 			a.destroyPage(id)
 		}
 	}

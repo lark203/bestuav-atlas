@@ -1,11 +1,15 @@
 package view
 
 import (
+	"fmt"
 	"math"
+	"runtime"
 	"runtime/debug"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"bestuav-atlas/internal/logging"
 )
 
 // 拓扑画布的视口状态：缩放 / 平移 / 悬停 / 悬停脉冲。
@@ -107,6 +111,11 @@ type graphPulse struct {
 // 不阻塞当前帧；重复离开会被 time.AfterFunc 自然合并。
 func (a *App) releaseGraphBuffers() {
 	g := &a.atlasUI.graph
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	before := m.HeapAlloc
+	hits, pts, curves := len(g.hits), len(g.ptsBuf), len(g.curveBuf)
+	nodes, edges, pulseNodes := len(g.nodesBuf), len(g.edgesBuf), len(g.pulse.depths)
 	g.hits = nil
 	g.ptsBuf = nil
 	g.curveBuf = nil
@@ -114,7 +123,18 @@ func (a *App) releaseGraphBuffers() {
 	g.nodesBuf = nil
 	g.edgesBuf = nil
 	g.pulse = graphPulse{}
-	time.AfterFunc(1500*time.Millisecond, debug.FreeOSMemory)
+	logging.Info("graph", "释放拓扑画布缓存",
+		"hits", hits, "pts", pts, "curve", curves,
+		"nodes", nodes, "edges", edges, "pulseDepths", pulseNodes,
+		"heapMB", fmt.Sprintf("%.1f", float64(before)/(1<<20)))
+	time.AfterFunc(1500*time.Millisecond, func() {
+		debug.FreeOSMemory()
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+		logging.Info("graph", "已归还堆页给系统",
+			"heapMB", fmt.Sprintf("%.1f", float64(after.HeapAlloc)/(1<<20)),
+			"freedMB", fmt.Sprintf("%.1f", float64(int64(before)-int64(after.HeapAlloc))/(1<<20)))
+	})
 }
 
 // reset 回到初始视图：1 倍、不偏移。
@@ -204,6 +224,9 @@ func (g *graphView) hitAt(x, y float32) *graphHit {
 // 离开节点 / 离开画布：立刻结束（用户要的「移开就结束」）。
 func (g *graphView) hoverNode(nodes []graphNode, edges [][2]int, idx int, now time.Time) {
 	if idx < 0 || idx >= len(nodes) {
+		if g.pulse.active {
+			logging.Debug("graph", "脉冲结束", "center", g.pulse.key.label, "depth", g.pulse.maxDepth)
+		}
 		g.pulse.active = false
 		return
 	}
@@ -213,6 +236,7 @@ func (g *graphView) hoverNode(nodes []graphNode, edges [][2]int, idx int, now ti
 	}
 	depths, maxDepth := graphBFS(nodes, edges, idx)
 	g.pulse = graphPulse{active: true, start: now, key: key, depths: depths, maxDepth: maxDepth}
+	logging.Debug("graph", "脉冲开始", "center", key.label, "nodes", len(depths), "depth", maxDepth)
 }
 
 // pulseDone 脉冲是否已经放完（所有跳数 + 淡出）。
@@ -275,6 +299,7 @@ func (a *App) graphCanvasInput(ev ui.InputEvent) bool {
 		}
 		factor := float32(math.Exp(-float64(ev.DY) * graphWheelFactor))
 		g.zoomAt(ev.X, ev.Y, factor)
+		logging.Debug("graph", "滚轮缩放", "zoom", fmt.Sprintf("%.2f", g.zoom), "dy", ev.DY)
 		a.requestFrame()
 		return true
 	case ui.InputZoom:
@@ -331,6 +356,7 @@ func (a *App) graphCanvasInput(ev ui.InputEvent) bool {
 
 // graphActivate 单击节点：仓库进详情、项目回项目页、待办回待办页。
 func (a *App) graphActivate(h graphHit) {
+	logging.Info("graph", "点击拓扑节点", "kind", h.kind.String(), "label", h.label, "id", h.id)
 	switch h.kind {
 	case gkRepo:
 		if r, ok := a.repoByID(h.id); ok {
@@ -340,6 +366,22 @@ func (a *App) graphActivate(h graphHit) {
 		a.page = "projects"
 	case gkTodo:
 		a.page = "todos"
+	}
+}
+
+// String 让日志里能直接看出节点类型。
+func (k graphKind) String() string {
+	switch k {
+	case gkProject:
+		return "project"
+	case gkRepo:
+		return "repo"
+	case gkTodo:
+		return "todo"
+	case gkUnassigned:
+		return "unassigned"
+	default:
+		return "none"
 	}
 }
 

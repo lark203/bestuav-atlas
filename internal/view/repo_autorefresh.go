@@ -141,8 +141,13 @@ func (a *App) tickRepoAutoRefresh() time.Duration {
 	a.repoAutoAt = now.Add(interval)
 	if !a.taskRunning && !a.heavyRunning && !a.atlasUI.busy {
 		if ids := a.allRepoIDs(); len(ids) > 0 {
+			logging.Info("auto", "自动刷新触发", "repos", len(ids), "intervalMin", minutes)
 			a.runRepoBatch(batchAuto, ids, "")
+		} else {
+			logging.Debug("auto", "自动刷新跳过：没有仓库")
 		}
+	} else {
+		logging.Debug("auto", "自动刷新跳过：已有任务在跑")
 	}
 	return interval
 }

@@ -177,6 +177,7 @@ func (a *App) openImportDialog() {
 func (a *App) openGraphDialog() {
 	a.atlasUI.graphProject = 0
 	a.atlasUI.graph.reset()
+	logging.Info("graph", "打开关系图谱", "scope", "all")
 	a.page = "topology"
 }
 
@@ -184,6 +185,7 @@ func (a *App) openGraphDialog() {
 func (a *App) openProjectGraph(projectID int64) {
 	a.atlasUI.graphProject = projectID
 	a.atlasUI.graph.reset()
+	logging.Info("graph", "打开项目拓扑", "project", projectID)
 	a.page = "topology"
 }
 

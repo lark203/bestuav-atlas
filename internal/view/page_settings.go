@@ -237,13 +237,15 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 				// 页面状态：各页面用 a.Prefs() 记住的筛选条件、草稿等。属于「可以随时丢」
 				// 的数据，给一个明确的清理入口，免得用户以为它跟任务/授权一样重要。
 				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-					ui.Text(c, fmt.Sprintf("页面状态：%d 条（各页面记住的筛选条件、草稿等）", a.prefCount())).
+					ui.Text(c, fmt.Sprintf("页面状态：%d 条偏好 + %d 个页面的运行时缓存（筛选条件、草稿、表格缓存等）",
+						a.prefCount(), a.pageStateCount())).
 						TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 					if ui.Button(c, "清理页面状态").Clicked() {
 						a.clearPrefs()
 					}
 				})
-				ui.Text(c, "清理只影响页面自己记住的状态，不动任务、授权记录、偏好与日志。").
+				ui.Text(c, "清理只影响页面自己记住的状态与运行时缓存，不动任务、授权记录、偏好与日志；"+
+					"当前页面保持不动，切走后自然重建。").
 					TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 
 				// 配置与数据：换机 / 备份 / 三台电脑之间搬运（见 internal/profile）。

@@ -147,12 +147,34 @@ func (a *App) prefCount() int64 {
 	return int64(len(a.prefMem))
 }
 
+// pageStateCount 当前持有内存缓存的页面数（设置页展示用）。
+//
+// 和 prefCount 的区别：prefCount 是「页面自己记住的偏好」（落 page_pref 表），
+// 这里是「页面运行时缓存」（表格排序缓存、滚动位置、异步任务状态……）。
+// 用户说的「清理页面状态没效果」，多半是只清了前者、后者还在。
+func (a *App) pageStateCount() int {
+	n := 0
+	for id, st := range a.pages {
+		if id == a.page {
+			continue // 当前页正在用，不统计、不清理
+		}
+		if len(st.data) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 // clearPrefs 清空所有页面状态（设置页「清理页面状态」）。
 //
-// 只动 page_pref：任务、授权记录、应用偏好与日志都不受影响。内存缓存必须一起清，
-// 否则清完还会读到旧值。
+// 做三件事，并把清掉的数量写进日志 / toast：
+//  1. 删除 page_pref 表里的页面偏好（筛选条件、草稿等）；
+//  2. 丢弃其它页面的运行时缓存（pageState.data、滚动位置）；
+//  3. 释放拓扑画布缓存（命中表、采样缓冲、BFS 层级）。
+//
+// 当前页面不动：它正在显示，清掉会当场闪一下/重置表单；离开后自然销毁。
 func (a *App) clearPrefs() {
-	var n int64
+	var prefs int64
 	if a.store != nil {
 		deleted, err := a.store.ClearPagePrefs()
 		if err != nil {
@@ -160,11 +182,25 @@ func (a *App) clearPrefs() {
 			a.toast("清理页面状态失败：" + err.Error())
 			return
 		}
-		n = deleted
+		prefs = deleted
 	} else {
-		n = int64(len(a.prefMem))
+		prefs = int64(len(a.prefMem))
 	}
 	a.prefMem = nil
-	logging.Audit("pref", "清空页面状态", "count", n)
-	a.toast(fmt.Sprintf("已清理 %d 条页面状态", n))
+
+	pages := 0
+	for id, st := range a.pages {
+		if id == a.page {
+			continue
+		}
+		if len(st.data) > 0 {
+			pages++
+		}
+		delete(a.pages, id)
+	}
+	// 拓扑画布的缓存不在 pageState 里，单独释放（同时会触发一次内存回收）。
+	a.releaseGraphBuffers()
+	logging.Audit("pref", "清理页面状态", "prefs", prefs, "pages", pages)
+	a.toast(fmt.Sprintf("已清理 %d 条页面偏好、%d 个页面的运行时缓存", prefs, pages))
+	a.requestFrame()
 }
