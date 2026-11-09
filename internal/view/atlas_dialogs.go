@@ -42,6 +42,8 @@ type atlasUI struct {
 	graphProject int64
 	// graph 是拓扑画布的缩放 / 平移 / 悬停状态（见 graph_canvas.go）。
 	graph graphView
+	// graphFilter 拓扑图的标签筛选（命中节点 + 一跳邻居）。
+	graphFilter string
 
 	// ---- 仓库页 ----
 	sel         map[int64]bool
@@ -625,8 +627,16 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 				a.requestFrame()
 			}
 		})
-		ui.Text(c, "滚轮以鼠标位置为中心缩放 · 拖动空白处平移 · 悬停节点看完整名称").
-			FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
+			ui.TextInput(c, &a.atlasUI.graphFilter).Width(180).Placeholder("筛选节点名称…")
+			if a.atlasUI.graphFilter != "" {
+				if smallButton(c, "清除").Clicked() {
+					a.atlasUI.graphFilter = ""
+				}
+			}
+			ui.Text(c, "滚轮以鼠标位置为中心缩放 · 拖动空白处平移 · 单击节点跳转 · 双击聚焦并发脉冲").
+				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+		})
 
 		if pid == 0 {
 			if len(d.projects) == 0 && len(d.repos) == 0 && len(d.todos) == 0 {
@@ -655,12 +665,20 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 			g.pointerX, g.pointerY = mx, my
 			area.Draw(func(p *ui.Painter, r ui.Rect) {
 				if pid != 0 {
-					a.drawProjectTopology(p, r, t, d.projectName(pid), d.projectRepos(pid), d.projectTodos(pid))
+					a.drawProjectTopology(p, r, t, pid, d.projectName(pid), d.projectRepos(pid), d.projectTodos(pid))
 				} else {
 					a.drawAtlasGraph(p, r, t, d)
 				}
 			})
 		})
+		if a.atlasUI.graphFilter != "" && g.visible == 0 {
+			ui.Text(c, "没有匹配「"+a.atlasUI.graphFilter+"」的节点，换个关键词试试。").
+				FontSize(t.FontSize - 2).TextColor(t.TextMuted)
+		}
+		// 聚焦镜头与脉冲是时间动画：动画期间每 16ms 要一帧。
+		if g.pulse.active || g.focus.active {
+			c.After(16 * time.Millisecond)
+		}
 	})
 }
 
@@ -677,7 +695,10 @@ type graphNode struct {
 	r     float32 // 圆点半径
 	hub   bool    // 项目等中枢节点：点更大、标签更深色
 	tier  int     // 0=项目 1=仓库 2=待办（环形布局按层分圈）
-	x, y  float32 // 由布局函数填充（画布内局部坐标）
+	// kind / id 是节点身份：单击时按它跳转，双击脉冲按它定位。
+	kind graphKind
+	id   int64
+	x, y float32 // 由布局函数填充（画布内局部坐标）
 }
 
 // projectTopologyGraph 把「一个项目 + 它的仓库/待办」变成节点与连线。
@@ -685,10 +706,10 @@ type graphNode struct {
 // 连线的关键约定：**每条边都是 0 → 子节点**，也就是每个仓库/待办都从项目中心
 // 直接连出去一条自己的线；不存在「先连到一个中间点再分叉」的共享线段。
 // 渲染层再给每条边一点弯曲，所以中枢附近不会叠成一根粗线。
-func projectTopologyGraph(t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) ([]graphNode, [][2]int) {
+func projectTopologyGraph(projectID int64, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) ([]graphNode, [][2]int) {
 	const capEach = 24 // 节点太多会糊成一团，超量截断（先在项目卡上看到总数）
 	nodes := make([]graphNode, 0, 1+len(repos)+len(todos))
-	nodes = append(nodes, graphNode{label: projectName, color: t.Accent, r: 9, hub: true})
+	nodes = append(nodes, graphNode{label: projectName, color: t.Accent, r: 9, hub: true, kind: gkProject, id: projectID})
 	edges := make([][2]int, 0, len(repos)+len(todos))
 
 	rs := repos
@@ -697,7 +718,7 @@ func projectTopologyGraph(t *ui.Theme, projectName string, repos []store.Repo, t
 	}
 	for _, rp := range rs {
 		idx := len(nodes)
-		nodes = append(nodes, graphNode{label: rp.Name, color: repoStatusColor(t, rp.Status), r: 5})
+		nodes = append(nodes, graphNode{label: rp.Name, color: repoStatusColor(t, rp.Status), r: 5, kind: gkRepo, id: rp.ID})
 		edges = append(edges, [2]int{0, idx})
 	}
 	ts := todos
@@ -710,15 +731,15 @@ func projectTopologyGraph(t *ui.Theme, projectName string, repos []store.Repo, t
 		if td.Status == TodoDone {
 			col = t.Success
 		}
-		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5})
+		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5, kind: gkTodo, id: td.ID})
 		edges = append(edges, [2]int{0, idx})
 	}
 	return nodes, edges
 }
 
 // drawProjectTopology 项目拓扑：以该项目为中枢，仓库与待办作为周围节点。
-func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) {
-	nodes, edges := projectTopologyGraph(t, projectName, repos, todos)
+func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectID int64, projectName string, repos []store.Repo, todos []store.Todo) {
+	nodes, edges := projectTopologyGraph(projectID, t, projectName, repos, todos)
 	a.drawNodeGraph(p, r, t, nodes, edges, false)
 }
 
@@ -1000,6 +1021,15 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 	g := &a.atlasUI.graph
 	g.w, g.h = r.W, r.H
 	g.ensure()
+	g.advance(time.Now())
+
+	// 标签筛选：命中节点 + 一跳邻居（保留上下文），下标会重排。
+	nodes, edges = filterGraph(nodes, edges, a.atlasUI.graphFilter)
+	g.visible = len(nodes)
+	if len(nodes) == 0 {
+		g.hits = g.hits[:0]
+		return
+	}
 
 	if ring {
 		// 全量关系图：项目内圈 / 仓库中圈 / 待办外圈。力导向在节点少时会拉成
@@ -1012,9 +1042,16 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 
 	// 世界坐标 → 屏幕坐标（缩放 + 平移在这里一次性算好）。
 	pts := make([][2]float32, len(nodes))
+	g.hits = g.hits[:0]
 	for i := range nodes {
 		x, y := g.screen(nodes[i].x, nodes[i].y)
 		pts[i] = [2]float32{x, y}
+		// 命中表与绘制共用同一份屏幕坐标，点击判定才不会偏。
+		g.hits = append(g.hits, graphHit{
+			x: x, y: y,
+			r:    clampFloat(nodes[i].r*g.zoom, 2.5, 24),
+			kind: nodes[i].kind, id: nodes[i].id, label: nodes[i].label,
+		})
 	}
 
 	// 悬停：屏幕坐标里找最近的节点。判定半径跟着缩放走，放大后更好点中。
@@ -1043,6 +1080,17 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 		}
 	}
 
+	// 脉冲中心：双击的节点。它相连的线在这一轮里保持高亮，亮点沿它们向外跑。
+	pulseCenter := -1
+	if g.pulse.active {
+		for i := range nodes {
+			if nodes[i].kind == g.pulse.kind && nodes[i].id == g.pulse.id && nodes[i].label == g.pulse.label {
+				pulseCenter = i
+				break
+			}
+		}
+	}
+
 	a.drawGraphGrid(p, r, t, g)
 
 	// 连线（先画，压在圆点下面）。每条边一条独立曲线：同中枢的多条线不会叠成一条。
@@ -1059,6 +1107,10 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 			} else {
 				col = kit.Alpha(t.Border, 0.35)
 			}
+		}
+		if pulseCenter >= 0 && (e[0] == pulseCenter || e[1] == pulseCenter) {
+			col = kit.Alpha(t.Accent, 0.85)
+			width = maxFloat(width, clampFloat(1.7*g.zoom, 1.1, 3))
 		}
 		// 相邻边交替朝两弯：从同一个中枢出发的多条线因此散成扇形，而不是一根粗线。
 		bend := float32(0.11)
@@ -1106,6 +1158,65 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 		}
 		p.Text(cx-lw/2, cy+rr+3, label, font, lcol)
 	}
+
+	// 脉冲画在最上层：亮点要能压过圆点和标签，才看得清「从中心向外发送」。
+	a.drawGraphPulse(p, r, t, g, nodes, edges, pts, pulseCenter)
+}
+
+// drawGraphPulse 画双击聚焦后的脉冲：中心一圈扩散波纹 + 沿每条相连边向外跑的亮点。
+//
+// 亮点用同一个二次贝塞尔求值（quadPoint），所以它严格贴着画出来的那条弧线跑；
+// 每条边的起点相位错开一点，看起来是一圈连续的波而不是所有点同时到达。
+func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView, nodes []graphNode, edges [][2]int, pts [][2]float32, center int) {
+	if !g.pulse.active || center < 0 {
+		return
+	}
+	prog := float32(time.Since(g.pulse.start)) / float32(graphPulseDur)
+	if prog < 0 {
+		return
+	}
+	centerR := clampFloat(nodes[center].r*g.zoom, 2.5, 24)
+
+	// 中心扩散波纹（前 70% 时间内淡出）。
+	if prog <= 1 {
+		wave := centerR + 80*prog
+		alpha := 0.5 * (1 - prog)
+		p.Stroke(ui.Rect{
+			X: r.X + pts[center][0] - wave, Y: r.Y + pts[center][1] - wave,
+			W: wave * 2, H: wave * 2,
+		}, kit.Alpha(t.Accent, float64(alpha)), wave, clampFloat(1.8*(1-prog), 0.7, 2))
+	}
+
+	edgeN := 0
+	for k, e := range edges {
+		if e[0] != center && e[1] != center {
+			continue
+		}
+		other := e[0]
+		if other == center {
+			other = e[1]
+		}
+		bend := float32(0.11)
+		if k%2 == 1 {
+			bend = -bend
+		}
+		sx, sy, cx, cy, ex, ey := graphCurvePoints(
+			r.X+pts[center][0], r.Y+pts[center][1], centerR,
+			r.X+pts[other][0], r.Y+pts[other][1], clampFloat(nodes[other].r*g.zoom, 2.5, 24),
+			bend)
+		// 每条边错开 6% 的相位；每条边放两颗亮点，形成一前一后的波。
+		head := prog*1.45 - float32(edgeN)*0.06
+		edgeN++
+		for _, at := range []float32{head, head - 0.13} {
+			if at < 0 || at > 1 {
+				continue
+			}
+			x, y := quadPoint(sx, sy, cx, cy, ex, ey, at)
+			rad := clampFloat(3.4*(1-at*0.35), 1.6, 4)
+			alpha := 0.95 * (1 - at*0.55)
+			p.Fill(ui.Rect{X: x - rad, Y: y - rad, W: rad * 2, H: rad * 2}, kit.Alpha(t.Accent, float64(alpha)), rad)
+		}
+	}
 }
 
 // drawGraphGrid 画一层很淡的点阵：缩放 / 平移时有参照，不至于「什么都没动」。
@@ -1141,14 +1252,14 @@ func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCach
 	projIdx := make(map[int64]int, len(d.projects))
 	for _, pr := range d.projects {
 		projIdx[pr.ID] = len(nodes)
-		nodes = append(nodes, graphNode{label: pr.Name, color: t.Accent, r: 9, hub: true, tier: 0})
+		nodes = append(nodes, graphNode{label: pr.Name, color: t.Accent, r: 9, hub: true, tier: 0, kind: gkProject, id: pr.ID})
 	}
 	// 「未归属」中枢：只有存在未归属仓库/待办时才创建。
 	unassigned := -1
 	getUnassigned := func() int {
 		if unassigned < 0 {
 			unassigned = len(nodes)
-			nodes = append(nodes, graphNode{label: "未归属", color: t.TextMuted, r: 8, hub: true, tier: 0})
+			nodes = append(nodes, graphNode{label: "未归属", color: t.TextMuted, r: 8, hub: true, tier: 0, kind: gkUnassigned})
 		}
 		return unassigned
 	}
@@ -1161,7 +1272,7 @@ func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCach
 	for _, rp := range repos {
 		idx := len(nodes)
 		repoIdx[rp.ID] = idx
-		nodes = append(nodes, graphNode{label: rp.Name, color: repoStatusColor(t, rp.Status), r: 5, tier: 1})
+		nodes = append(nodes, graphNode{label: rp.Name, color: repoStatusColor(t, rp.Status), r: 5, tier: 1, kind: gkRepo, id: rp.ID})
 		if pi, ok := projIdx[rp.ProjectID]; ok {
 			edges = append(edges, [2]int{pi, idx})
 		} else {
@@ -1179,7 +1290,7 @@ func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCach
 		if td.Status == TodoDone {
 			col = t.Success
 		}
-		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5, tier: 2})
+		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5, tier: 2, kind: gkTodo, id: td.ID})
 		if ri, ok := repoIdx[td.RepoID]; ok {
 			edges = append(edges, [2]int{ri, idx})
 		} else if pi, ok := projIdx[td.ProjectID]; ok {

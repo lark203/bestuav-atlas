@@ -141,6 +141,19 @@ func TestScreenshots(t *testing.T) {
 	save("atlas-graph-all")
 	a.atlasUI.graph.reset()
 
+	// 脉冲：把脉冲起点回拨 260ms，截到「亮点跑到一半」的那一帧。
+	a.openProjectGraph(1)
+	a.atlasUI.graph.pulse = graphPulse{
+		active: true,
+		start:  time.Now().Add(-260 * time.Millisecond),
+		kind:   gkProject,
+		id:     1,
+		label:  a.atlas().projectName(1),
+	}
+	save("atlas-topology-pulse")
+	a.atlasUI.graph.pulse.active = false
+	a.atlasUI.graph.reset()
+
 	// 仓库页：选中两个仓库时的批量条（含批量删除）。
 	if repos2, err := st.ListRepos(); err == nil && len(repos2) > 0 {
 		a.atlasUI.sel = map[int64]bool{repos2[0].ID: true}

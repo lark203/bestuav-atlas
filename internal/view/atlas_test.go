@@ -537,7 +537,7 @@ func TestProjectTopologyDirectEdges(t *testing.T) {
 	if tt := ui.NewTester(func(c *ui.Context) { th = c.Theme() }, 40, 40); tt != nil {
 		tt.Frame()
 	}
-	nodes, edges := projectTopologyGraph(th, "星图", d.projectRepos(pid), d.projectTodos(pid))
+	nodes, edges := projectTopologyGraph(pid, th, "星图", d.projectRepos(pid), d.projectTodos(pid))
 	if len(nodes) < 2 {
 		t.Skip("没有子节点")
 	}
@@ -579,6 +579,112 @@ func TestTopologyWheelZoom(t *testing.T) {
 	tt.Frame()
 	if a.atlasUI.graph.zoom >= up {
 		t.Errorf("滚轮向下后应缩小：before=%v after=%v", up, a.atlasUI.graph.zoom)
+	}
+}
+
+// TestFilterGraphKeepsNeighbors 筛选保留命中项与一跳邻居，重排后下标仍然自洽。
+func TestFilterGraphKeepsNeighbors(t *testing.T) {
+	nodes := []graphNode{
+		{label: "星图", kind: gkProject, id: 1},
+		{label: "lark203/bestuav-atlas", kind: gkRepo, id: 11},
+		{label: "写周报", kind: gkTodo, id: 21},
+		{label: "另一个项目", kind: gkProject, id: 2},
+	}
+	edges := [][2]int{{0, 1}, {1, 2}, {3, 1}}
+	got, gotEdges := filterGraph(nodes, edges, "atlas")
+	if len(got) != 4 {
+		t.Fatalf("命中仓库 + 相连的项目/待办应保留 4 个节点，实际 %d：%+v", len(got), got)
+	}
+	if len(gotEdges) != 3 {
+		t.Errorf("保留的边应仍是 3 条，实际 %d", len(gotEdges))
+	}
+	for _, e := range gotEdges {
+		if e[0] < 0 || e[1] < 0 || e[0] >= len(got) || e[1] >= len(got) {
+			t.Errorf("重排后的边越界：%v（节点数 %d）", e, len(got))
+		}
+	}
+
+	only, _ := filterGraph(nodes, edges, "写周报")
+	if len(only) != 2 {
+		t.Errorf("命中待办 + 相连仓库应剩 2 个节点，实际 %d", len(only))
+	}
+	if empty, _ := filterGraph(nodes, edges, "不存在"); len(empty) != 0 {
+		t.Errorf("没有命中时结果应为空")
+	}
+}
+
+// TestGraphDoubleClickFocuses 双击节点：设置镜头推进目标并发起脉冲。
+func TestGraphDoubleClickFocuses(t *testing.T) {
+	a, st := newTestApp(t)
+	pid, _ := seedAtlas(t, a, st)
+	a.openProjectGraph(pid)
+	tt := ui.NewTester(a.View, 1200, 800)
+	tt.Frame()
+
+	g := &a.atlasUI.graph
+	if len(g.hits) == 0 {
+		t.Fatal("画布没有产出命中信息")
+	}
+	var hit graphHit
+	for _, h := range g.hits {
+		if h.kind == gkProject {
+			hit = h
+		}
+	}
+	if hit.kind != gkProject {
+		t.Fatal("没找到项目节点")
+	}
+	if !a.graphCanvasInput(ui.InputEvent{Kind: ui.InputPointerDown, Button: 0, Clicks: 2, X: hit.x, Y: hit.y}) {
+		t.Fatal("双击应被画布消费")
+	}
+	if !g.pulse.active || !g.focus.active {
+		t.Fatalf("双击后应进入聚焦 + 脉冲：pulse=%v focus=%v", g.pulse.active, g.focus.active)
+	}
+	if g.focus.toZoom <= 1 {
+		t.Errorf("聚焦应放大：目标 zoom=%v", g.focus.toZoom)
+	}
+	// 双击的抬起不能触发单击跳转，否则页面会立刻切走、聚焦和脉冲都看不见。
+	a.graphCanvasInput(ui.InputEvent{Kind: ui.InputPointerUp, Button: 0, X: hit.x, Y: hit.y})
+	if a.page != "topology" {
+		t.Errorf("双击后不应跳转页面，实际 %q", a.page)
+	}
+
+	// 镜头推进结束后动画应自然停下。
+	time.Sleep(graphFocusDur + 80*time.Millisecond)
+	tt.Frame()
+	if g.focus.active {
+		t.Error("镜头推进应已结束")
+	}
+}
+
+// TestGraphClickActivatesRepo 单击仓库节点进入仓库详情。
+func TestGraphClickActivatesRepo(t *testing.T) {
+	a, st := newTestApp(t)
+	_, repoID := seedAtlas(t, a, st)
+	a.graphActivate(graphHit{kind: gkRepo, id: repoID})
+	if a.page != "repo-detail" {
+		t.Errorf("点仓库应进详情页，实际 %q", a.page)
+	}
+	if a.atlasUI.detailID != repoID {
+		t.Errorf("详情页应是仓库 %d，实际 %d", repoID, a.atlasUI.detailID)
+	}
+
+	a.page = "topology"
+	a.graphActivate(graphHit{kind: gkProject, id: 1})
+	if a.page != "projects" {
+		t.Errorf("点项目应回项目页，实际 %q", a.page)
+	}
+}
+
+// TestQuadPointEnds 贝塞尔求值在两端等于端点（脉冲沿画出来的线跑的前提）。
+func TestQuadPointEnds(t *testing.T) {
+	x, y := quadPoint(10, 20, 50, 60, 90, 20, 0)
+	if x != 10 || y != 20 {
+		t.Errorf("t=0 应为起点 (10,20)，实际 (%v,%v)", x, y)
+	}
+	x, y = quadPoint(10, 20, 50, 60, 90, 20, 1)
+	if x != 90 || y != 20 {
+		t.Errorf("t=1 应为终点 (90,20)，实际 (%v,%v)", x, y)
 	}
 }
 
