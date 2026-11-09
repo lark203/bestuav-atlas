@@ -3,7 +3,7 @@ package view
 import (
 	"context"
 	"fmt"
-	"sort"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -597,7 +597,7 @@ func (a *App) graphDialog(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	a.atlasModal(c, t, "关系图谱", func() {
-		dialogDesc(c, t, "仓库居中，向左连线到归属项目，向右连线到关联待办；同一项目下的多个仓库共用一条汇聚线。")
+		dialogDesc(c, t, "每个圆点是一个项目 / 仓库 / 待办；仓库连到所属项目，待办连到所属仓库（没有仓库时连到项目）。")
 
 		if len(d.repos) == 0 && len(d.projects) == 0 && len(d.todos) == 0 {
 			ui.Text(c, "还没有任何项目 / 仓库 / 待办，先去录入一些数据再来看关系图。").
@@ -605,18 +605,9 @@ func (a *App) graphDialog(c *ui.Context, t *ui.Theme) {
 			return
 		}
 
-		// 画布高度：行数取「项目数 / 仓库数」较大者，每行给足高度；上限避免过高。
-		rowCount := len(d.repos)
-		if len(d.projects)+1 > rowCount { // +1 = 可能有的「未归属」
-			rowCount = len(d.projects) + 1
-		}
-		if rowCount < 1 {
-			rowCount = 1
-		}
-		graphH := 48 + rowCount*46
-		if graphH > 920 {
-			graphH = 920
-		}
+		// 力导向图需要一块偏方形的画布：节点越多给得越高，设上下限。
+		// 同心环布局由画布宽度决定半径，高度取偏方形（约 460）即可，过高只是留白。
+		graphH := 460
 
 		ui.Row(c).Fill().Children(func() {
 			ui.Box(c).Grow(1).Height(float32(graphH)).Children(func() {
@@ -641,29 +632,17 @@ func (a *App) projectTopologyDialog(c *ui.Context, t *ui.Theme, d *atlasCache, p
 	repos := d.projectRepos(pid)
 	todos := d.projectTodos(pid)
 	a.atlasModal(c, t, "拓扑图 · "+name, func() {
-		dialogDesc(c, t, "中心是本项目；左侧连出它的待办，右侧连出它的仓库。")
+		dialogDesc(c, t, "中心是本项目，周围散开它的仓库与待办；连线表示归属关系。")
 		if len(repos) == 0 && len(todos) == 0 {
 			ui.Text(c, "这个项目下面还没有仓库或待办。").
 				TextColor(t.TextMuted)
 			return
 		}
-		n := len(repos)
-		if len(todos) > n {
-			n = len(todos)
-		}
-		if n < 1 {
-			n = 1
-		}
-		if n > 14 {
-			n = 14
-		}
-		// 树形高度：项目块 + 分支 + n 行子节点（行高 34）。
-		graphH := 130 + (n-1)*34
-		if graphH < 240 {
-			graphH = 240
-		}
-		if graphH > 920 {
-			graphH = 920
+		// 力导向图需要偏方形的画布：节点越多给得越高，设上下限。
+		count := 1 + len(repos) + len(todos)
+		graphH := 400 + count*16
+		if graphH > 760 {
+			graphH = 760
 		}
 		ui.Row(c).Fill().Children(func() {
 			ui.Box(c).Grow(1).Height(float32(graphH)).Children(func() {
@@ -681,305 +660,363 @@ func (a *App) projectTopologyDialog(c *ui.Context, t *ui.Theme, d *atlasCache, p
 	})
 }
 
-// drawProjectTopology 项目拓扑图（树形/组织图式）：项目在顶部居中，向下分叉出
-// 左列（仓库）与右列（待办）。宽度自适应画布——两列各占一半，窄弹窗里也不会重叠。
+// ---- Obsidian 风格的节点关系图 ----
 //
-// 为什么不用「左中右三列」（那是全量关系图的做法）：弹窗面板在窄窗口里只有 ~440 宽，
-// 三列 150/120/150 会挤在一起。树形布局只依赖两列，任何宽度都摆得下，也更像「一个
-// 项目往下展开它的待办与仓库」这种拓扑关系。
-//
-// 待办沿用「未完成=次要色 / 已完成=成功色」，仓库沿用状态色，与仓库页配色一致。
+// 视觉参考 Obsidian 的 graph view：每个实体是一个小圆点，标签居中在点下方，
+// 关联用细线连接，位置由「力导向」布局自然散开（不是排队/分栏的方块）。
+// 项目拓扑与全量关系图共用同一套「节点 + 连线」数据模型与渲染。
+
+// graphNode 图里的一个实体（项目 / 仓库 / 待办 / 未归属）。
+type graphNode struct {
+	label string
+	color ui.Color
+	r     float32 // 圆点半径
+	hub   bool    // 项目等中枢节点：点更大、标签更深色
+	tier  int     // 0=项目 1=仓库 2=待办（环形布局按层分圈）
+	x, y  float32 // 由布局函数填充（画布内局部坐标）
+}
+
+// drawProjectTopology 项目拓扑：以该项目为中枢，仓库与待办作为周围节点。
 func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) {
-	const pad float32 = 16
-	const nodeH float32 = 24
-	const step float32 = 34 // 行高 = nodeH + 10 行距
-	const size float32 = 12
-	const colGap float32 = 20
-	const maxPerCol = 14
+	nodes := make([]graphNode, 0, 1+len(repos)+len(todos))
+	nodes = append(nodes, graphNode{label: projectName, color: t.Accent, r: 9, hub: true})
+	edges := make([][2]int, 0, len(repos)+len(todos))
 
-	// 把「数据」整理成「展示节点」：超量时末位换成「+N」汇总节点。
-	type node struct {
-		label   string
-		border  ui.Color
-		textCol ui.Color
+	const capEach = 24 // 节点太多会糊成一团，超量截断（先在项目卡上看到总数）
+	rs := repos
+	if len(rs) > capEach {
+		rs = rs[:capEach]
 	}
-	build := func(n int, mk func(i int) node, more string) []node {
-		show := n
-		if show > maxPerCol-1 {
-			show = maxPerCol - 1
-		}
-		out := make([]node, 0, show+1)
-		for i := 0; i < show; i++ {
-			out = append(out, mk(i))
-		}
-		if n > show {
-			out = append(out, node{fmt.Sprintf(more, n-show), t.TextMuted, t.TextMuted})
-		}
-		return out
+	for _, rp := range rs {
+		idx := len(nodes)
+		nodes = append(nodes, graphNode{label: rp.Name, color: repoStatusColor(t, rp.Status), r: 5})
+		edges = append(edges, [2]int{0, idx})
 	}
-	rnodes := build(len(repos), func(i int) node {
-		rp := repos[i]
-		return node{rp.Name, repoStatusColor(t, rp.Status), t.Text}
-	}, "+%d 个仓库")
-	tnodes := build(len(todos), func(i int) node {
-		td := todos[i]
-		bc, tc := t.TextMuted, t.Text
+	ts := todos
+	if len(ts) > capEach {
+		ts = ts[:capEach]
+	}
+	for _, td := range ts {
+		idx := len(nodes)
+		col := t.TextMuted
 		if td.Status == TodoDone {
-			bc, tc = t.Success, t.TextMuted
+			col = t.Success
 		}
-		return node{td.Title, bc, tc}
-	}, "+%d 条待办")
-
-	rows := len(rnodes)
-	if len(tnodes) > rows {
-		rows = len(tnodes)
+		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5})
+		edges = append(edges, [2]int{0, idx})
 	}
-	if rows < 1 {
-		rows = 1
-	}
-
-	// 两列等分（仓库左、待办右）。宽度全由 r.W 推出来，避免写死导致窄弹窗重叠。
-	colW := (r.W - 2*pad - colGap) / 2
-	leftCx := r.X + pad + colW/2
-	rightCx := r.X + pad + colW + colGap + colW/2
-
-	// 竖直方向尽量居中：内容总高固定，多余空间上下均分。
-	projW := r.W * 0.6
-	if projW > 240 {
-		projW = 240
-	}
-	contentH := nodeH + 16 + 16 + nodeH + float32(rows-1)*step + nodeH/2 + pad
-	offY := (r.H - contentH) / 2
-	if offY < 0 {
-		offY = 0
-	}
-	top := r.Y + offY + pad
-
-	projCx := r.X + r.W/2
-	projCy := top + nodeH/2
-	branchY := top + nodeH + 16              // 横向分支线
-	firstY := branchY + 16 + nodeH/2         // 第一行子节点中心
-
-	// ---- 连线（先画，节点盖住线头）----
-	edge := t.Border
-	p.Line(projCx, top+nodeH, projCx, branchY, 1.2, edge) // 项目下方竖线
-	p.Line(leftCx, branchY, rightCx, branchY, 1.2, edge)  // 横向分支
-	for i := range rnodes {
-		cy := firstY + float32(i)*step
-		p.Line(leftCx, branchY, leftCx, cy-nodeH/2, 1.2, edge)
-	}
-	for i := range tnodes {
-		cy := firstY + float32(i)*step
-		p.Line(rightCx, branchY, rightCx, cy-nodeH/2, 1.2, edge)
-	}
-
-	// ---- 节点 ----
-	drawNode := func(cx, cy, w float32, label string, border, textCol ui.Color) {
-		rr := ui.Rect{X: cx - w/2, Y: cy - nodeH/2, W: w, H: nodeH}
-		p.Fill(rr, t.Surface, 6)
-		p.Stroke(rr, border, 6, 1.5)
-		// Text 的 y 是文字顶部（不是基线）：cy-size/2 让文字在节点里垂直居中。
-		p.Text(rr.X+8, cy-size*0.5, truncateToPx(label, w, size), size, textCol)
-	}
-	// 项目（强调色，顶部居中）
-	drawNode(projCx, projCy, projW, "项目 · "+projectName, t.Accent, t.Accent)
-	// 子节点
-	for i, nd := range rnodes {
-		drawNode(leftCx, firstY+float32(i)*step, colW, nd.label, nd.border, nd.textCol)
-	}
-	for i, nd := range tnodes {
-		drawNode(rightCx, firstY+float32(i)*step, colW, nd.label, nd.border, nd.textCol)
-	}
-	// 两列小标题（放在分支线与第一行之间的空隙里）
-	p.Text(leftCx-colW/2, branchY+3, "仓库", size-2, t.TextMuted)
-	p.Text(rightCx-colW/2, branchY+3, "待办", size-2, t.TextMuted)
+	a.drawNodeGraph(p, r, t, nodes, edges, false)
 }
 
-// gnode 图谱里的一个节点（项目 / 仓库 / 待办）。
-type gnode struct {
-	x, y, w, h float32
-	label      string
-	border     ui.Color
-	textCol    ui.Color
+// measureText 估算单行文字宽度（CJK 全角≈字号，其余≈0.55 字号），用于标签水平居中。
+func measureText(s string, font float32) float32 {
+	var w float32
+	for _, rr := range s {
+		if rr > 0x2E80 {
+			w += font
+		} else {
+			w += font * 0.55
+		}
+	}
+	return w
 }
 
-// drawAtlasGraph 把关系图画在 r 里：项目在左、仓库居中、待办在右，连线表达归属。
-func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCache) {
-	const pad float32 = 16
-	const nodeH float32 = 22
-	const size float32 = 12
-
-	// 三列宽度按画布宽度自适应（总和恰好占满 pad 之间的区域），避免窄弹窗里重叠。
-	inner := r.W - 2*pad
-	gap := inner * 0.05
-	projW := inner * 0.30
-	repoW := inner * 0.30
-	todoW := inner * 0.30
-	leftX := r.X + pad
-	repoX := leftX + projW + gap
-	rightX := repoX + repoW + gap
-
-	// ---- 收集项目（含「未归属」）----
-	type proj struct{ id int64; name string; y float32 }
-	projs := make([]proj, 0)
-	projSeen := map[int64]bool{}
-	needUnassigned := false
-	for _, rp := range d.repos {
-		if rp.ProjectID == 0 {
-			needUnassigned = true
-		} else if !projSeen[rp.ProjectID] {
-			projSeen[rp.ProjectID] = true
-			projs = append(projs, proj{id: rp.ProjectID, name: d.projectName(rp.ProjectID)})
+// forceLayout 确定性力导向布局：初始点按序号均匀落在圆周上（无随机，每帧结果一致，
+// 所以不会抖动）；迭代做「节点互斥 + 连线相吸 + 轻微向心」，得到类似 Obsidian 的
+// 自然散开效果。坐标为画布内局部坐标（0..w, 0..h）。
+func forceLayout(nodes []graphNode, edges [][2]int, w, h, pad float32) {
+	n := len(nodes)
+	if n == 0 {
+		return
+	}
+	cx, cy := w/2, h/2
+	short := w
+	if h < short {
+		short = h
+	}
+	initR := short/2 - pad
+	if initR < 24 {
+		initR = 24
+	}
+	for i := range nodes {
+		ang := 2 * math.Pi * float64(i) / float64(n)
+		nodes[i].x = cx + initR*float32(math.Cos(ang))
+		nodes[i].y = cy + initR*float32(math.Sin(ang))
+	}
+	// 理想边长 k：按「每节点可用面积」推算，节点多则自动缩小；给上下限避免过稀/过挤。
+	k := float32(math.Sqrt(float64(w*h) / float64(n+1)))
+	k *= 0.9
+	if k < 62 {
+		k = 62
+	}
+	if k > 150 {
+		k = 150
+	}
+	const iters = 280
+	dxs := make([]float32, n)
+	dys := make([]float32, n)
+	for it := 0; it < iters; it++ {
+		for i := range dxs {
+			dxs[i], dys[i] = 0, 0
 		}
-	}
-	for _, td := range d.todos {
-		if td.ProjectID == 0 {
-			needUnassigned = true
-		} else if !projSeen[td.ProjectID] {
-			projSeen[td.ProjectID] = true
-			projs = append(projs, proj{id: td.ProjectID, name: d.projectName(td.ProjectID)})
-		}
-	}
-	for _, pr := range d.projects {
-		if !projSeen[pr.ID] {
-			projSeen[pr.ID] = true
-			projs = append(projs, proj{id: pr.ID, name: pr.Name})
-		}
-	}
-	if needUnassigned {
-		projs = append(projs, proj{id: 0, name: "未归属"})
-	}
-	// 项目纵向均匀分布（layVertical 给的是相对顶部的 y，加上 r.Y 才是绝对坐标）
-	projY := make(map[int64]float32, len(projs))
-	layVertical(len(projs), pad, r.H, func(i int, y float32) { projY[projs[i].id] = r.Y + y })
-
-	// ---- 仓库纵向均匀分布 ----
-	type repo struct{ id int64; name string; col ui.Color; y float32 }
-	repos := make([]repo, 0, len(d.repos))
-	repoY := make(map[int64]float32, len(d.repos))
-	layVerticalIdx(len(d.repos), pad, r.H, func(i int, y float32) {
-		rp := d.sortedRepos()[i]
-		repos = append(repos, repo{id: rp.ID, name: rp.Name, col: repoStatusColor(t, rp.Status)})
-		repoY[rp.ID] = r.Y + y
-	})
-
-	// ---- 待办：连到其仓库（优先）或项目，按锚点聚拢 ----
-	type todo struct{ anchor int64; isProj bool; title string; done bool; y float32 }
-	todos := make([]todo, 0)
-	// 先按锚点分组，便于堆叠
-	byAnchor := map[string][]todo{}
-	for _, td := range d.todos {
-		var anchor int64
-		isProj := false
-		if td.RepoID != 0 {
-			if _, ok := repoY[td.RepoID]; !ok {
-				continue // 仓库不在列表里（理论上不会）
+		// 互斥（库仑力）
+		for i := 0; i < n; i++ {
+			for j := i + 1; j < n; j++ {
+				ddx := nodes[i].x - nodes[j].x
+				ddy := nodes[i].y - nodes[j].y
+				dist := float32(math.Hypot(float64(ddx), float64(ddy)))
+				if dist < 0.5 {
+					dist = 0.5
+				}
+				f := k * k / dist
+				ux, uy := ddx/dist, ddy/dist
+				dxs[i] += ux * f
+				dys[i] += uy * f
+				dxs[j] -= ux * f
+				dys[j] -= uy * f
 			}
-			anchor = td.RepoID
-		} else if td.ProjectID != 0 {
-			if _, ok := projY[td.ProjectID]; !ok {
+		}
+		// 相吸（沿连线的弹簧力）
+		for _, e := range edges {
+			a0, b0 := e[0], e[1]
+			if a0 < 0 || b0 < 0 || a0 >= n || b0 >= n {
 				continue
 			}
-			anchor = td.ProjectID
-			isProj = true
-		} else {
-			continue // 既无仓库也无项目：不显示
-		}
-		rec := todo{anchor: anchor, isProj: isProj, title: td.Title, done: td.Status == TodoDone}
-		byAnchor[anchorKey(anchor, isProj)] = append(byAnchor[anchorKey(anchor, isProj)], rec)
-	}
-	const maxPerAnchor = 6
-	const step float32 = 20
-	for key, group := range byAnchor {
-		// 稳定排序：未完成的在上、按标题
-		sort.SliceStable(group, func(i, j int) bool {
-			if group[i].done != group[j].done {
-				return !group[i].done
+			ddx := nodes[a0].x - nodes[b0].x
+			ddy := nodes[a0].y - nodes[b0].y
+			dist := float32(math.Hypot(float64(ddx), float64(ddy)))
+			if dist < 0.5 {
+				dist = 0.5
 			}
-			return group[i].title < group[j].title
-		})
-		// 锚点 y
-		var ay float32
-		if isProj, aid := parseAnchorKey(key); isProj {
-			ay = projY[aid]
-		} else {
-			ay = repoY[aid]
+			f := dist * dist / k
+			ux, uy := ddx/dist, ddy/dist
+			dxs[a0] -= ux * f
+			dys[a0] -= uy * f
+			dxs[b0] += ux * f
+			dys[b0] += uy * f
 		}
-		m := len(group)
-		if m > maxPerAnchor {
-			m = maxPerAnchor
+		// 轻微向心，避免离群点飘走
+		for i := 0; i < n; i++ {
+			dxs[i] += (cx - nodes[i].x) * 0.03
+			dys[i] += (cy - nodes[i].y) * 0.03
 		}
-		for k := 0; k < m; k++ {
-			yy := ay + (float32(k) - float32(m-1)/2)*step
-			if yy < r.Y+pad+nodeH/2 {
-				yy = r.Y + pad + nodeH/2
+		// 应用位移（阻尼 + 限步，防止震荡）
+		const damp = 0.12
+		for i := 0; i < n; i++ {
+			mx := dxs[i] * damp
+			my := dys[i] * damp
+			m := float32(math.Hypot(float64(mx), float64(my)))
+			if maxStep := k * 0.4; m > maxStep {
+				mx *= maxStep / m
+				my *= maxStep / m
 			}
-			if yy > r.Y+r.H-pad-nodeH/2 {
-				yy = r.Y + r.H - pad - nodeH/2
-			}
-			todos = append(todos, todo{anchor: anchorOfKey(key), isProj: isProjOfKey(key), title: group[k].title, done: group[k].done, y: yy})
-		}
-		if len(group) > maxPerAnchor {
-			yy := ay + (float32(m-1)-float32(m-1)/2)*step + step
-			if yy > r.Y+r.H-pad-nodeH/2 {
-				yy = r.Y + r.H - pad - nodeH/2
-			}
-			todos = append(todos, todo{anchor: anchorOfKey(key), isProj: isProjOfKey(key), title: fmt.Sprintf("+%d 条", len(group)-maxPerAnchor), done: false, y: yy})
+			nodes[i].x += mx
+			nodes[i].y += my
 		}
 	}
+	// 夹在画布内：左右留出「半个标签宽」的余量，避免标签被画布边缘裁掉；
+	// 下方留出标签高度（标签在点下方）。
+	clampf := func(v, lo, hi float32) float32 {
+		if hi < lo {
+			lo, hi = hi, lo
+		}
+		if v < lo {
+			return lo
+		}
+		if v > hi {
+			return hi
+		}
+		return v
+	}
+	xm := w * 0.15
+	if xm < 48 {
+		xm = 48
+	}
+	if xm > w/2-8 {
+		xm = w/2 - 8
+	}
+	if xm < 0 {
+		xm = 0
+	}
+	for i := range nodes {
+		nodes[i].x = clampf(nodes[i].x, xm, w-xm)
+		nodes[i].y = clampf(nodes[i].y, 26, h-32)
+	}
+}
 
-	edge := t.Border
-	// ---- 先画线（被节点盖在下面）----
-	// 项目 → 仓库
-	for _, rp := range repos {
-		pid := projectIDOfRepo(d, rp.id)
-		py, ok := projY[pid]
-		if !ok {
+// ringLayout 确定性同心环布局：按 tier 分圈（项目内圈 / 仓库中圈 / 待办外圈），
+// 每层内按下标等分角度、从正上方开始。节点多也不会挤成一行，是稳定可读的
+// 放射状拓扑。只有单个项目时把它放正中心（当作中枢）。
+func ringLayout(nodes []graphNode, w, h, pad float32) {
+	cx, cy := w/2, h/2
+	short := w
+	if h < short {
+		short = h
+	}
+	maxR := short/2 - 44
+	if maxR < 40 {
+		maxR = 40
+	}
+	counts := map[int]int{}
+	for _, nd := range nodes {
+		counts[nd.tier]++
+	}
+	radiusOf := func(tier int) float32 {
+		switch tier {
+		case 0:
+			return maxR * 0.30
+		case 1:
+			return maxR * 0.66
+		default:
+			return maxR * 0.98
+		}
+	}
+	seen := map[int]int{}
+	for i := range nodes {
+		t := nodes[i].tier
+		k := counts[t]
+		j := seen[t]
+		seen[t]++
+		r := radiusOf(t)
+		if t == 0 && k == 1 {
+			// 单个项目：放正中心
+			nodes[i].x, nodes[i].y = cx, cy
 			continue
 		}
-		// rp.y 字段未赋值（恒 0），真实 y 在 repoY 映射里——用错会画出从窗口顶部落下的斜线。
-		p.Line(repoX, repoY[rp.id], leftX+projW, py, 1.2, edge)
+		ang := 2*math.Pi*float64(j)/float64(k) - math.Pi/2 // 从正上方起
+		nodes[i].x = cx + r*float32(math.Cos(ang))
+		nodes[i].y = cy + r*float32(math.Sin(ang))
 	}
-	// 仓库/项目 → 待办
-	for _, td := range todos {
-		var sx, sy float32
-		if td.isProj {
-			sx, sy = leftX+projW, projY[td.anchor]
-		} else {
-			sx, sy = repoX+repoW, repoY[td.anchor]
+	// 夹在画布内，留出标签空间
+	clampf := func(v, lo, hi float32) float32 {
+		if hi < lo {
+			lo, hi = hi, lo
 		}
-		p.Line(sx, sy, rightX, td.y, 1.2, edge)
+		if v < lo {
+			return lo
+		}
+		if v > hi {
+			return hi
+		}
+		return v
+	}
+	xm := w*0.15
+	if xm < 48 {
+		xm = 48
+	}
+	if xm > w/2-8 {
+		xm = w/2 - 8
+	}
+	if xm < 0 {
+		xm = 0
+	}
+	for i := range nodes {
+		nodes[i].x = clampf(nodes[i].x, xm, w-xm)
+		nodes[i].y = clampf(nodes[i].y, 26, h-32)
+	}
+}
+
+// drawNodeGraph 用 Obsidian 风格画节点图：细线 + 小圆点 + 点下方居中标签。
+// ring=true 用同心环布局（项目内圈 / 仓库中圈 / 待办外圈，按下标等分角度）——
+// 适合节点多的「全量关系图」，不会像力导向那样把同层节点挤成一行；ring=false 用
+// 力导向布局，适合「一个中心 + 一圈叶子」的项目拓扑，更有机自然。
+func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graphNode, edges [][2]int, ring bool) {
+	if len(nodes) == 0 {
+		return
+	}
+	const nodeFont float32 = 11
+	const labelMax float32 = 108
+	const pad float32 = 30
+	if ring {
+		ringLayout(nodes, r.W, r.H, pad)
+	} else {
+		forceLayout(nodes, edges, r.W, r.H, pad)
 	}
 
-	// ---- 节点 ----
-	drawNode := func(x, y, w, h float32, label string, border, textCol ui.Color) {
-		rr := ui.Rect{X: x, Y: y - h/2, W: w, H: h}
-		p.Fill(rr, t.Surface, 6)
-		p.Stroke(rr, border, 6, 1.5)
-		// Text 的 y 是文字顶部：y-size/2 让文字在节点里垂直居中。
-		p.Text(x+8, y-size*0.5, truncateToPx(label, w, size), size, textCol)
+	// 连线（先画，压在圆点下面）
+	edgeCol := t.Border
+	for _, e := range edges {
+		if e[0] < 0 || e[1] < 0 || e[0] >= len(nodes) || e[1] >= len(nodes) {
+			continue
+		}
+		p.Line(r.X+nodes[e[0]].x, r.Y+nodes[e[0]].y,
+			r.X+nodes[e[1]].x, r.Y+nodes[e[1]].y, 1, edgeCol)
 	}
-	// 项目（左侧，强调色描边 + 强调色文字）。y 取自 projY 映射——
-	// proj 结构体的 y 字段并未赋值，早期误用它导致节点被画在 y=0（跑到画布外）。
-	for _, pr := range projs {
-		drawNode(leftX, projY[pr.id], projW, nodeH, pr.name, t.Accent, t.Accent)
+	// 节点：背景色光晕 + 实心圆点 + 居中标签
+	for _, nd := range nodes {
+		cx, cy := r.X+nd.x, r.Y+nd.y
+		halo := ui.Rect{X: cx - nd.r - 2, Y: cy - nd.r - 2, W: (nd.r + 2) * 2, H: (nd.r + 2) * 2}
+		p.Fill(halo, t.Background, nd.r+2) // 光晕：线条不贴在点上
+		dot := ui.Rect{X: cx - nd.r, Y: cy - nd.r, W: nd.r * 2, H: nd.r * 2}
+		p.Fill(dot, nd.color, nd.r)
+		label := truncateToPx(nd.label, labelMax, nodeFont)
+		lw := measureText(label, nodeFont)
+		col := t.TextMuted
+		if nd.hub {
+			col = t.Text
+		}
+		p.Text(cx-lw/2, cy+nd.r+3, label, nodeFont, col)
 	}
-	// 仓库（居中，按状态色描边）。同理取 repoY 映射。
+}
+
+// drawAtlasGraph 全量关系图：所有项目 / 仓库 / 待办各自成一个圆点，仓库连到所属
+// 项目、待办连到所属仓库（没有仓库时连到项目）。布局与项目拓扑共用 drawNodeGraph。
+func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCache) {
+	nodes := make([]graphNode, 0, len(d.projects)+len(d.repos)+len(d.todos)+1)
+	edges := make([][2]int, 0, len(d.repos)+len(d.todos))
+
+	projIdx := make(map[int64]int, len(d.projects))
+	for _, pr := range d.projects {
+		projIdx[pr.ID] = len(nodes)
+		nodes = append(nodes, graphNode{label: pr.Name, color: t.Accent, r: 9, hub: true, tier: 0})
+	}
+	// 「未归属」中枢：只有存在未归属仓库/待办时才创建。
+	unassigned := -1
+	getUnassigned := func() int {
+		if unassigned < 0 {
+			unassigned = len(nodes)
+			nodes = append(nodes, graphNode{label: "未归属", color: t.TextMuted, r: 8, hub: true, tier: 0})
+		}
+		return unassigned
+	}
+
+	repos := d.sortedRepos()
+	if len(repos) > 40 {
+		repos = repos[:40]
+	}
+	repoIdx := make(map[int64]int, len(repos))
 	for _, rp := range repos {
-		drawNode(repoX, repoY[rp.id], repoW, nodeH, rp.name, rp.col, t.Text)
+		idx := len(nodes)
+		repoIdx[rp.ID] = idx
+		nodes = append(nodes, graphNode{label: rp.Name, color: repoStatusColor(t, rp.Status), r: 5, tier: 1})
+		if pi, ok := projIdx[rp.ProjectID]; ok {
+			edges = append(edges, [2]int{pi, idx})
+		} else {
+			edges = append(edges, [2]int{getUnassigned(), idx})
+		}
 	}
-	// 待办（右侧，未完成用次要色、已完成用成功色）
+
+	todos := d.todos
+	if len(todos) > 60 {
+		todos = todos[:60]
+	}
 	for _, td := range todos {
-		bc := t.TextMuted
-		if td.done {
-			bc = t.Success
+		idx := len(nodes)
+		col := t.TextMuted
+		if td.Status == TodoDone {
+			col = t.Success
 		}
-		tc := t.Text
-		if td.done {
-			tc = t.TextMuted
+		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5, tier: 2})
+		if ri, ok := repoIdx[td.RepoID]; ok {
+			edges = append(edges, [2]int{ri, idx})
+		} else if pi, ok := projIdx[td.ProjectID]; ok {
+			edges = append(edges, [2]int{pi, idx})
+		} else {
+			edges = append(edges, [2]int{getUnassigned(), idx})
 		}
-		drawNode(rightX, td.y, todoW, nodeH, td.title, bc, tc)
 	}
+
+	a.drawNodeGraph(p, r, t, nodes, edges, true)
 }
 
 // layVertical 把 n 个节点在 [pad, h-pad] 上均匀分布，回调拿到第 i 个的中心 y。
