@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -92,6 +93,16 @@ type App struct {
 	bgLoadingFor string
 	// bgGen 是解码代次：换图/清除时递增，用来丢弃迟到的旧解码结果。
 	bgGen uint64
+
+	// ---- 视口监视（见 memory.go） ----
+	// 整体缩放/窗口尺寸变化停止 1.2s 后做一次 FreeOSMemory：缩放期间引擎每帧
+	// 重排会推高 HeapSys，但 GC 不会主动把空闲页还给系统。
+	zoomSeen     float32
+	viewW, viewH float32
+	fontSeen     float32
+	viewportGen  atomic.Int64
+	// viewportReleases 自动回收的执行次数（测试与诊断用）。
+	viewportReleases atomic.Int64
 
 	// 浮层不透明度（0.2–1.0）：设置背景图后侧栏/内容区半透明，背景图透出。
 	// 未设置背景图时恒为不透明，保持主题默认外观。
@@ -895,6 +906,8 @@ func (a *App) View(c *ui.Context) {
 	defer logging.Recover("view")
 
 	t := c.Theme()
+	// 视口监视：整体缩放/改窗停下后回收一次内存（见 memory.go）。
+	a.watchViewport(c)
 
 	// 全局快捷键：放在最前，切页/关弹窗在本帧就生效（见 shortcuts.go）。
 	a.handleShortcuts(c)

@@ -582,6 +582,34 @@ func TestTopologyWheelZoom(t *testing.T) {
 	}
 }
 
+// TestReleaseMemory 手动/自动释放内存入口不 panic，并返回一个有限的归还量。
+func TestReleaseMemory(t *testing.T) {
+	a, _ := newTestApp(t)
+	got := a.releaseMemory("test")
+	if math.IsNaN(got) || math.IsInf(got, 0) {
+		t.Fatalf("归还量应是有限数值，实际 %v", got)
+	}
+}
+
+// TestViewportSettleReleasesMemory 整体缩放停止后应自动触发一次内存回收。
+func TestViewportSettleReleasesMemory(t *testing.T) {
+	a, st := newTestApp(t)
+	seedAtlas(t, a, st)
+	a.page = "repos"
+	tt := ui.NewTester(a.View, 1100, 700)
+	tt.Frame()
+	tt.SetZoom(1.4) // 模拟窗口整体缩放
+	tt.Frame()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for a.viewportReleases.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if a.viewportReleases.Load() == 0 {
+		t.Fatal("缩放停止后应自动回收一次内存")
+	}
+}
+
 // TestClearPrefsDropsPageCaches 「清理页面状态」不只清 page_pref，还要丢其它页面的
 // 运行时缓存（这正是之前「看不出效果」的原因），当前页保持不动。
 func TestClearPrefsDropsPageCaches(t *testing.T) {

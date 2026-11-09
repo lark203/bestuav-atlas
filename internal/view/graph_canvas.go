@@ -3,8 +3,6 @@ package view
 import (
 	"fmt"
 	"math"
-	"runtime"
-	"runtime/debug"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -105,15 +103,10 @@ type graphPulse struct {
 // releaseGraphBuffers 离开拓扑页时释放画布缓存：命中表、采样缓冲、BFS 层级，
 // 并让 Go 把归还的堆页尽快交还操作系统。
 //
-// 为什么要 FreeOSMemory：Go 的 GC 只把内存标成可复用，不一定马上去 `madvise`
-// 还给系统；而任务管理器看的是工作集，于是「进了几次拓扑图、缩放一圈再离开」
-// 看起来很像是没回落。这里在离开页面后延迟一次 scavenge，代价是一次 GC，
-// 不阻塞当前帧；重复离开会被 time.AfterFunc 自然合并。
+// 页面级的数据在这里丢；真正的「把空闲页还给系统」复用 memory.go 的
+// releaseMemory（统一记录 heap/sys 前后值），延迟 1.5s 执行，避免阻塞离场动画。
 func (a *App) releaseGraphBuffers() {
 	g := &a.atlasUI.graph
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	before := m.HeapAlloc
 	hits, pts, curves := len(g.hits), len(g.ptsBuf), len(g.curveBuf)
 	nodes, edges, pulseNodes := len(g.nodesBuf), len(g.edgesBuf), len(g.pulse.depths)
 	g.hits = nil
@@ -125,16 +118,8 @@ func (a *App) releaseGraphBuffers() {
 	g.pulse = graphPulse{}
 	logging.Info("graph", "释放拓扑画布缓存",
 		"hits", hits, "pts", pts, "curve", curves,
-		"nodes", nodes, "edges", edges, "pulseDepths", pulseNodes,
-		"heapMB", fmt.Sprintf("%.1f", float64(before)/(1<<20)))
-	time.AfterFunc(1500*time.Millisecond, func() {
-		debug.FreeOSMemory()
-		var after runtime.MemStats
-		runtime.ReadMemStats(&after)
-		logging.Info("graph", "已归还堆页给系统",
-			"heapMB", fmt.Sprintf("%.1f", float64(after.HeapAlloc)/(1<<20)),
-			"freedMB", fmt.Sprintf("%.1f", float64(int64(before)-int64(after.HeapAlloc))/(1<<20)))
-	})
+		"nodes", nodes, "edges", edges, "pulseDepths", pulseNodes)
+	time.AfterFunc(1500*time.Millisecond, func() { a.releaseMemory("graph-release") })
 }
 
 // reset 回到初始视图：1 倍、不偏移。

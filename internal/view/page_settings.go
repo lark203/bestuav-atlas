@@ -248,6 +248,16 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 					"当前页面保持不动，切走后自然重建。").
 					TextColor(t.TextMuted).FontSize(t.FontSize - 2)
 
+				// 内存：缩放/改窗后 HeapSys 会涨，GC 默认不急着还页；给一个手动出口。
+				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Margin(6, 0, 0, 0).Children(func() {
+					ui.Text(c, "缩放窗口或调整整体缩放后，内存工作集可能偏高（Go 会把空闲页留着复用）。"+
+						"自动回收在缩放停止 1.2s 后执行一次；也可手动立即释放。").
+						TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+					if ui.Button(c, "释放内存").Clicked() {
+						a.releaseMemoryNow()
+					}
+				})
+
 				// 配置与数据：换机 / 备份 / 三台电脑之间搬运（见 internal/profile）。
 				ui.Text(c, "配置与数据").Bold().Margin(8, 0, 0, 0)
 				ui.Text(c, "换机时在旧机器导出、新机器导入即可复用设置、任务、授权与页面状态；"+
