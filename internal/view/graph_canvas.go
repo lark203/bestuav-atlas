@@ -2,6 +2,7 @@ package view
 
 import (
 	"math"
+	"runtime/debug"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -32,6 +33,13 @@ type graphView struct {
 
 	// hits 是最近一帧的节点命中表（画布屏幕坐标），输入命中测试用它。
 	hits []graphHit
+
+	// 绘制用的复用缓冲：每帧重建但容量保留，避免缩放/脉冲期间反复分配。
+	ptsBuf   [][2]float32 // 节点屏幕坐标
+	curveBuf [][2]float32 // 一条边的采样折线
+	adjacent []bool       // 悬停节点的相邻标记（按节点下标）
+	nodesBuf []graphNode  // 图模型：节点（每帧重填，不重新分配）
+	edgesBuf [][2]int     // 图模型：连线
 
 	w, h float32 // 最近一帧画布尺寸（缩放按钮用）
 
@@ -88,6 +96,25 @@ type graphPulse struct {
 	key      graphKey
 	depths   map[graphKey]int
 	maxDepth int
+}
+
+// releaseGraphBuffers 离开拓扑页时释放画布缓存：命中表、采样缓冲、BFS 层级，
+// 并让 Go 把归还的堆页尽快交还操作系统。
+//
+// 为什么要 FreeOSMemory：Go 的 GC 只把内存标成可复用，不一定马上去 `madvise`
+// 还给系统；而任务管理器看的是工作集，于是「进了几次拓扑图、缩放一圈再离开」
+// 看起来很像是没回落。这里在离开页面后延迟一次 scavenge，代价是一次 GC，
+// 不阻塞当前帧；重复离开会被 time.AfterFunc 自然合并。
+func (a *App) releaseGraphBuffers() {
+	g := &a.atlasUI.graph
+	g.hits = nil
+	g.ptsBuf = nil
+	g.curveBuf = nil
+	g.adjacent = nil
+	g.nodesBuf = nil
+	g.edgesBuf = nil
+	g.pulse = graphPulse{}
+	time.AfterFunc(1500*time.Millisecond, debug.FreeOSMemory)
 }
 
 // reset 回到初始视图：1 倍、不偏移。
@@ -320,17 +347,33 @@ func (a *App) graphActivate(h graphHit) {
 
 // graphCurve 画一条「从 a 到 b」的二次贝塞尔弧线。
 //
-// 为什么不用直线：一个项目连十个仓库时，十条直线会在中枢附近叠成一条粗线，
-// 看起来像「几个节点共用一条线」。每条边给一点固定方向的弯曲（相邻边交替左右），
-// 线就散开了——这也是 Obsidian 图里连线的观感。
-//
+// 用**折线采样**而不是 Path + StrokePath：Path 笔画在 mygo 里会走「按路径哈希缓存
+// 栅格化蒙版」的通道，而拓扑图每帧的曲线坐标都随缩放/平移变化，等于每帧给蒙版
+// 缓存塞新条目——内存涨上去、页面销毁也不回落。StrokePolyline 在 GPU 后端是
+// 逐段圆角矩形绘制，不碰蒙版缓存；折线用 12 段近似，肉眼与真曲线一致。
+func graphCurve(p *ui.Painter, buf [][2]float32, x1, y1, r1, x2, y2, r2, bend, width float32, col ui.Color) [][2]float32 {
+	pts := graphCurvePolyline(buf[:0], x1, y1, r1, x2, y2, r2, bend)
+	if len(pts) < 2 {
+		return pts
+	}
+	p.StrokePolyline(pts, width, col)
+	return pts
+}
+
+// graphCurvePolyline 把一条边的二次贝塞尔采样成折线，写进 dst（复用切片）。
 // 起点/终点各退到圆点边缘，线不会压在圆点上。
-func graphCurve(p *ui.Painter, x1, y1, r1, x2, y2, r2, bend, width float32, col ui.Color) {
+func graphCurvePolyline(dst [][2]float32, x1, y1, r1, x2, y2, r2, bend float32) [][2]float32 {
 	sx, sy, cx, cy, ex, ey := graphCurvePoints(x1, y1, r1, x2, y2, r2, bend)
 	if sx == ex && sy == ey {
-		return
+		return dst
 	}
-	p.StrokePath((&ui.Path{}).MoveTo(sx, sy).QuadTo(cx, cy, ex, ey), width, col)
+	const segments = 12
+	for i := 0; i <= segments; i++ {
+		t := float32(i) / segments
+		x, y := quadPoint(sx, sy, cx, cy, ex, ey, t)
+		dst = append(dst, [2]float32{x, y})
+	}
+	return dst
 }
 
 // graphCurvePoints 计算一条边的起点、控制点、终点（都退到圆点边缘）。

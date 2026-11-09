@@ -661,9 +661,10 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 				}
 			})
 		})
-		// 脉冲是时间动画：还在放的时候每 16ms 要一帧；放完就自然停。
+		// 脉冲是时间动画：还在放的时候约 30fps 请求帧（16ms 全速会把整页重排两次），
+		// 放完就自然停。
 		if g.pulse.active && !g.pulseDone(time.Now()) {
-			c.After(16 * time.Millisecond)
+			c.After(33 * time.Millisecond)
 		}
 	})
 }
@@ -692,11 +693,14 @@ type graphNode struct {
 // 连线的关键约定：**每条边都是 0 → 子节点**，也就是每个仓库/待办都从项目中心
 // 直接连出去一条自己的线；不存在「先连到一个中间点再分叉」的共享线段。
 // 渲染层再给每条边一点弯曲，所以中枢附近不会叠成一根粗线。
-func projectTopologyGraph(projectID int64, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) ([]graphNode, [][2]int) {
+//
+// dstNodes/dstEdges 是复用缓冲（传 g.nodesBuf[:0] / g.edgesBuf[:0]）：拓扑图每帧
+// 都要重建模型，按帧分配两个切片会持续制造短命垃圾。
+func projectTopologyGraph(dstNodes []graphNode, dstEdges [][2]int, projectID int64, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) ([]graphNode, [][2]int) {
 	const capEach = 24 // 节点太多会糊成一团，超量截断（先在项目卡上看到总数）
-	nodes := make([]graphNode, 0, 1+len(repos)+len(todos))
+	nodes := dstNodes[:0]
+	edges := dstEdges[:0]
 	nodes = append(nodes, graphNode{label: projectName, color: t.Accent, r: 9, hub: true, kind: gkProject, id: projectID})
-	edges := make([][2]int, 0, len(repos)+len(todos))
 
 	rs := repos
 	if len(rs) > capEach {
@@ -725,7 +729,9 @@ func projectTopologyGraph(projectID int64, t *ui.Theme, projectName string, repo
 
 // drawProjectTopology 项目拓扑：以该项目为中枢，仓库与待办作为周围节点。
 func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectID int64, projectName string, repos []store.Repo, todos []store.Todo) {
-	nodes, edges := projectTopologyGraph(projectID, t, projectName, repos, todos)
+	g := &a.atlasUI.graph
+	nodes, edges := projectTopologyGraph(g.nodesBuf[:0], g.edgesBuf[:0], projectID, t, projectName, repos, todos)
+	g.nodesBuf, g.edgesBuf = nodes, edges
 	a.drawNodeGraph(p, r, t, nodes, edges, false)
 }
 
@@ -740,129 +746,6 @@ func measureText(s string, font float32) float32 {
 		}
 	}
 	return w
-}
-
-// forceLayout 确定性力导向布局：初始点按序号均匀落在圆周上（无随机，每帧结果一致，
-// 所以不会抖动）；迭代做「节点互斥 + 连线相吸 + 轻微向心」，得到类似 Obsidian 的
-// 自然散开效果。坐标为画布内局部坐标（0..w, 0..h）。
-func forceLayout(nodes []graphNode, edges [][2]int, w, h, pad float32) {
-	n := len(nodes)
-	if n == 0 {
-		return
-	}
-	cx, cy := w/2, h/2
-	short := w
-	if h < short {
-		short = h
-	}
-	initR := short/2 - pad
-	if initR < 24 {
-		initR = 24
-	}
-	for i := range nodes {
-		ang := 2 * math.Pi * float64(i) / float64(n)
-		nodes[i].x = cx + initR*float32(math.Cos(ang))
-		nodes[i].y = cy + initR*float32(math.Sin(ang))
-	}
-	// 理想边长 k：按「每节点可用面积」推算，节点多则自动缩小；给上下限避免过稀/过挤。
-	k := float32(math.Sqrt(float64(w*h) / float64(n+1)))
-	k *= 0.9
-	if k < 62 {
-		k = 62
-	}
-	if k > 150 {
-		k = 150
-	}
-	const iters = 280
-	dxs := make([]float32, n)
-	dys := make([]float32, n)
-	for it := 0; it < iters; it++ {
-		for i := range dxs {
-			dxs[i], dys[i] = 0, 0
-		}
-		// 互斥（库仑力）
-		for i := 0; i < n; i++ {
-			for j := i + 1; j < n; j++ {
-				ddx := nodes[i].x - nodes[j].x
-				ddy := nodes[i].y - nodes[j].y
-				dist := float32(math.Hypot(float64(ddx), float64(ddy)))
-				if dist < 0.5 {
-					dist = 0.5
-				}
-				f := k * k / dist
-				ux, uy := ddx/dist, ddy/dist
-				dxs[i] += ux * f
-				dys[i] += uy * f
-				dxs[j] -= ux * f
-				dys[j] -= uy * f
-			}
-		}
-		// 相吸（沿连线的弹簧力）
-		for _, e := range edges {
-			a0, b0 := e[0], e[1]
-			if a0 < 0 || b0 < 0 || a0 >= n || b0 >= n {
-				continue
-			}
-			ddx := nodes[a0].x - nodes[b0].x
-			ddy := nodes[a0].y - nodes[b0].y
-			dist := float32(math.Hypot(float64(ddx), float64(ddy)))
-			if dist < 0.5 {
-				dist = 0.5
-			}
-			f := dist * dist / k
-			ux, uy := ddx/dist, ddy/dist
-			dxs[a0] -= ux * f
-			dys[a0] -= uy * f
-			dxs[b0] += ux * f
-			dys[b0] += uy * f
-		}
-		// 轻微向心，避免离群点飘走
-		for i := 0; i < n; i++ {
-			dxs[i] += (cx - nodes[i].x) * 0.03
-			dys[i] += (cy - nodes[i].y) * 0.03
-		}
-		// 应用位移（阻尼 + 限步，防止震荡）
-		const damp = 0.12
-		for i := 0; i < n; i++ {
-			mx := dxs[i] * damp
-			my := dys[i] * damp
-			m := float32(math.Hypot(float64(mx), float64(my)))
-			if maxStep := k * 0.4; m > maxStep {
-				mx *= maxStep / m
-				my *= maxStep / m
-			}
-			nodes[i].x += mx
-			nodes[i].y += my
-		}
-	}
-	// 夹在画布内：左右留出「半个标签宽」的余量，避免标签被画布边缘裁掉；
-	// 下方留出标签高度（标签在点下方）。
-	clampf := func(v, lo, hi float32) float32 {
-		if hi < lo {
-			lo, hi = hi, lo
-		}
-		if v < lo {
-			return lo
-		}
-		if v > hi {
-			return hi
-		}
-		return v
-	}
-	xm := w * 0.15
-	if xm < 48 {
-		xm = 48
-	}
-	if xm > w/2-8 {
-		xm = w/2 - 8
-	}
-	if xm < 0 {
-		xm = 0
-	}
-	for i := range nodes {
-		nodes[i].x = clampf(nodes[i].x, xm, w-xm)
-		nodes[i].y = clampf(nodes[i].y, 26, h-32)
-	}
 }
 
 // radialCenterLayout 以 nodes[0] 为中心、其余节点在椭圆环上均分角度的放射布局：
@@ -1017,8 +900,11 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 		radialCenterLayout(nodes, r.W, r.H)
 	}
 
-	// 世界坐标 → 屏幕坐标（缩放 + 平移在这里一次性算好）。
-	pts := make([][2]float32, len(nodes))
+	// 世界坐标 → 屏幕坐标（缩放 + 平移在这里一次性算好）。缓冲复用，避免每帧分配。
+	if cap(g.ptsBuf) < len(nodes) {
+		g.ptsBuf = make([][2]float32, len(nodes))
+	}
+	pts := g.ptsBuf[:len(nodes)]
 	g.hits = g.hits[:0]
 	for i := range nodes {
 		x, y := g.screen(nodes[i].x, nodes[i].y)
@@ -1029,6 +915,15 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 			r:    clampFloat(nodes[i].r*g.zoom, 2.5, 24),
 			kind: nodes[i].kind, id: nodes[i].id, label: nodes[i].label,
 		})
+	}
+
+	// 相邻标记用按节点下标的 bool 切片（复用），不建 map——每帧建 map 是持续的堆分配。
+	if cap(g.adjacent) < len(nodes) {
+		g.adjacent = make([]bool, len(nodes))
+	}
+	adjacent := g.adjacent[:len(nodes)]
+	for i := range adjacent {
+		adjacent[i] = false
 	}
 
 	// 悬停：屏幕坐标里找最近的节点。判定半径跟着缩放走，放大后更好点中。
@@ -1045,7 +940,6 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 			}
 		}
 	}
-	adjacent := make(map[int]bool, 8)
 	if g.hover >= 0 {
 		for _, e := range edges {
 			switch g.hover {
@@ -1073,6 +967,7 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 	a.drawGraphGrid(p, r, t, g)
 
 	// 连线（先画，压在圆点下面）。每条边一条独立曲线：同中枢的多条线不会叠成一条。
+	curveBuf := g.curveBuf[:0]
 	for k, e := range edges {
 		if e[0] < 0 || e[1] < 0 || e[0] >= len(nodes) || e[1] >= len(nodes) {
 			continue
@@ -1100,13 +995,17 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 		if k%2 == 1 {
 			bend = -bend
 		}
-		graphCurve(p,
+		curveBuf = graphCurve(p, curveBuf,
 			r.X+pts[e[0]][0], r.Y+pts[e[0]][1], clampFloat(nodes[e[0]].r*g.zoom, 2.5, 24),
 			r.X+pts[e[1]][0], r.Y+pts[e[1]][1], clampFloat(nodes[e[1]].r*g.zoom, 2.5, 24),
 			bend, width, col)
 	}
+	g.curveBuf = curveBuf[:0]
 
 	// 节点：背景色光晕 + 实心圆点 + 居中标签；悬停的放大、显示完整名称。
+	//
+	// 字号按整数取整：连续字号会让文字蒙版缓存按每一个小数尺寸各存一份，
+	// 缩放几次就把缓存撑大；取整后最多十几个尺寸，缓存有界。
 	for i := range nodes {
 		nd := &nodes[i]
 		cx, cy := r.X+pts[i][0], r.Y+pts[i][1]
@@ -1125,11 +1024,15 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 			p.Stroke(ring, kit.Alpha(t.Accent, 0.9), rr+3, 1.5)
 		}
 
-		font := clampFloat(12*g.zoom, 8, 20)
+		font := clampFloat(float32(math.Round(float64(12*g.zoom))), 8, 20)
 		labelMax := 150 * g.zoom
 		label := truncateToPx(nd.label, labelMax, font)
+		showLabel := g.zoom >= 0.6 || nd.hub || i == g.hover || adjacent[i]
 		if i == g.hover {
 			label = nd.label // 悬停时给全名，不再省略
+		}
+		if !showLabel {
+			continue // 缩得很远时只留圆点：少画几百个标签，文字蒙版缓存压力小很多
 		}
 		lw := measureText(label, font)
 		lcol := t.TextMuted
@@ -1200,15 +1103,19 @@ func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView
 			r.X+pts[from][0], r.Y+pts[from][1], clampFloat(nodes[from].r*g.zoom, 2.5, 24),
 			r.X+pts[to][0], r.Y+pts[to][1], clampFloat(nodes[to].r*g.zoom, 2.5, 24),
 			bend)
-		for _, at := range []float32{prog, prog - 0.16} {
+		// 每条边两颗亮点（当前 + 拖尾）。不用 []float32{...} 字面量：那是每边每帧
+		// 一次额外分配，缩放/悬停时帧率高，堆上会有明显的短命垃圾。
+		pulseDotAt := func(at float32) {
 			if at < 0 || at > 1 {
-				continue
+				return
 			}
 			x, y := quadPoint(sx, sy, cx, cy, ex, ey, at)
 			rad := clampFloat(3.4*(1-at*0.35), 1.6, 4)
 			alpha := 0.95 * (1 - at*0.55)
 			p.Fill(ui.Rect{X: x - rad, Y: y - rad, W: rad * 2, H: rad * 2}, kit.Alpha(t.Accent, float64(alpha)), rad)
 		}
+		pulseDotAt(prog)
+		pulseDotAt(prog - 0.16)
 	}
 
 	// 被触达的节点亮一下再淡出：这是「邻居亮起，再跳二跳」的可视反馈。
@@ -1235,11 +1142,16 @@ func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView
 }
 
 // drawGraphGrid 画一层很淡的点阵：缩放 / 平移时有参照，不至于「什么都没动」。
-// 点距跟着缩放走，太密或太稀时夹在合理区间。
+//
+// 点阵是「每帧几百个场景 op」的大头，步长刻意取得粗一些：参照物只需要有，不需要密。
+// 目标上限 ~700 个点；超过就把步长继续拉大。
 func (a *App) drawGraphGrid(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView) {
-	step := clampFloat(28*g.zoom, 16, 64)
+	step := clampFloat(48*g.zoom, 28, 96)
 	if step <= 0 {
 		return
+	}
+	for r.W/step*r.H/step > 700 {
+		step *= 1.25
 	}
 	// 点阵用「次要文字色 + 低透明度」：比边框色更耐看，缩放/平移时有参照物。
 	col := kit.Alpha(t.TextMuted, 0.22)
@@ -1261,9 +1173,9 @@ func (a *App) drawGraphGrid(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView)
 // drawAtlasGraph 全量关系图：所有项目 / 仓库 / 待办各自成一个圆点，仓库连到所属
 // 项目、待办连到所属仓库（没有仓库时连到项目）。布局与项目拓扑共用 drawNodeGraph。
 func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCache) {
-	nodes := make([]graphNode, 0, len(d.projects)+len(d.repos)+len(d.todos)+1)
-	edges := make([][2]int, 0, len(d.repos)+len(d.todos))
-
+	g := &a.atlasUI.graph
+	nodes := g.nodesBuf[:0]
+	edges := g.edgesBuf[:0]
 	projIdx := make(map[int64]int, len(d.projects))
 	for _, pr := range d.projects {
 		projIdx[pr.ID] = len(nodes)
@@ -1315,6 +1227,7 @@ func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCach
 		}
 	}
 
+	g.nodesBuf, g.edgesBuf = nodes, edges
 	a.drawNodeGraph(p, r, t, nodes, edges, true)
 }
 

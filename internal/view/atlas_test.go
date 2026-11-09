@@ -537,7 +537,7 @@ func TestProjectTopologyDirectEdges(t *testing.T) {
 	if tt := ui.NewTester(func(c *ui.Context) { th = c.Theme() }, 40, 40); tt != nil {
 		tt.Frame()
 	}
-	nodes, edges := projectTopologyGraph(pid, th, "星图", d.projectRepos(pid), d.projectTodos(pid))
+	nodes, edges := projectTopologyGraph(nil, nil, pid, th, "星图", d.projectRepos(pid), d.projectTodos(pid))
 	if len(nodes) < 2 {
 		t.Skip("没有子节点")
 	}
@@ -653,6 +653,28 @@ func TestPulseDoneAfterLastHop(t *testing.T) {
 	g.pulse.start = time.Now().Add(-span - 10*time.Millisecond)
 	if !g.pulseDone(time.Now()) {
 		t.Error("超过总时长后脉冲应结束")
+	}
+}
+
+// TestLeaveTopologyReleasesBuffers 离开拓扑页会释放画布缓存（命中表 / 采样缓冲 / BFS 层级）。
+func TestLeaveTopologyReleasesBuffers(t *testing.T) {
+	a, st := newTestApp(t)
+	pid, _ := seedAtlas(t, a, st)
+	a.openProjectGraph(pid)
+	tt := ui.NewTester(a.View, 1000, 700)
+	tt.Frame()
+
+	g := &a.atlasUI.graph
+	if len(g.hits) == 0 || len(g.ptsBuf) == 0 {
+		t.Fatal("进入拓扑页后应建立命中表与采样缓冲")
+	}
+
+	a.page = "projects" // 触发 onLeave
+	tt.Frame()
+	if g.hits != nil || g.ptsBuf != nil || g.curveBuf != nil || g.adjacent != nil ||
+		g.nodesBuf != nil || g.edgesBuf != nil || g.pulse.active {
+		t.Errorf("离开拓扑页后画布缓存应清空：hits=%d pts=%d curve=%d adj=%d nodes=%d edges=%d pulse=%v",
+			len(g.hits), len(g.ptsBuf), len(g.curveBuf), len(g.adjacent), len(g.nodesBuf), len(g.edgesBuf), g.pulse.active)
 	}
 }
 

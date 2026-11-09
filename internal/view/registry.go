@@ -86,7 +86,13 @@ func navRegistry() []navGroup {
 			// 拓扑图：整页大画布（仿仓库详情），从项目卡「拓扑图」或「关系图谱」进入；
 			// 不出现在侧栏，返回键回到项目页。
 			{id: "topology", label: "拓扑图", icon: icons.Share2, build: (*App).topologyPage,
-				hidden: true, back: "projects", policy: pagePolicy{keep: keepCached}},
+				hidden: true, back: "projects",
+				// 画布的命中表 / 采样缓冲 / BFS 层级都是页面临时资源：离开就丢，
+				// 别让「看过几次拓扑图」在 App 上留下越来越大的缓存。
+				policy: pagePolicy{keep: keepCached,
+					onLeave:   func(a *App) { a.releaseGraphBuffers() },
+					onDestroy: func(a *App) { a.releaseGraphBuffers() },
+				}},
 			{id: "todos", label: "待办", icon: icons.Checklist, build: (*App).todoPage,
 				policy: pagePolicy{keep: keepCached},
 				tools: []toolAction{
