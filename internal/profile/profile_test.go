@@ -304,3 +304,53 @@ func contains(list []string, want string) bool {
 	}
 	return false
 }
+
+// TestNotesMediaRoundTrip 笔记图片目录随配置包导出/导入，正文里的相对路径无需改写。
+func TestNotesMediaRoundTrip(t *testing.T) {
+	f := newFixture(t)
+	media := filepath.Join(f.dataDir, "notes-media")
+	if err := os.MkdirAll(media, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(media, "abc.png"), "PNGDATA")
+
+	res, err := Export(ExportOptions{
+		Out:           f.zipPath,
+		SettingsPath:  f.settingsPath,
+		DBPath:        f.dbPath,
+		MediaDir:      media,
+		IncludeData:   true,
+		SchemaVersion: store.SchemaVersion(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IncludesMedia || res.MediaFiles != 1 {
+		t.Fatalf("导出应带 1 张笔记图片: %+v", res)
+	}
+
+	dst := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dst, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dst, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ir, err := Import(ImportOptions{
+		In:            f.zipPath,
+		SettingsPath:  filepath.Join(dst, "config", "settings.json"),
+		DBPath:        filepath.Join(dst, "data", "data.db"),
+		DataDir:       filepath.Join(dst, "data"),
+		SchemaVersion: store.SchemaVersion(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ir.ImportedMedia {
+		t.Fatal("导入应恢复笔记图片")
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "data", "notes-media", "abc.png"))
+	if err != nil || string(got) != "PNGDATA" {
+		t.Fatalf("导入的图片内容不一致: %q err=%v", got, err)
+	}
+}

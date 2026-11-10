@@ -56,6 +56,7 @@ const (
 	gkProject
 	gkRepo
 	gkTodo
+	gkNote       // 笔记（项目拓扑里挂到项目上的）
 	gkUnassigned // 「未归属」虚拟中枢
 )
 
@@ -351,6 +352,12 @@ func (a *App) graphActivate(h graphHit) {
 		a.page = "projects"
 	case gkTodo:
 		a.page = "todos"
+	case gkNote:
+		// 笔记节点：进笔记页、选中该篇并直接进入阅读模式。
+		a.notesOnEnter()
+		a.page = "notes"
+		a.selectNote(h.id)
+		a.notes.reading = true
 	}
 }
 
@@ -363,6 +370,8 @@ func (k graphKind) String() string {
 		return "repo"
 	case gkTodo:
 		return "todo"
+	case gkNote:
+		return "note"
 	case gkUnassigned:
 		return "unassigned"
 	default:

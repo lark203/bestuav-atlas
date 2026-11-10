@@ -213,6 +213,8 @@ type App struct {
 	// atlasUI 是弹窗、筛选与多选状态。
 	atlasCache atlasCache
 	atlasUI    atlasUI
+	// notes 笔记页的跨帧状态（列表缓存、编辑中的字段、自动保存计时器），见 page_notes.go。
+	notes notesUI
 
 	// ---- 伴生桌宠（见 pet.go） ----
 	petWin         *mygo.Window // 桌宠小窗（nil = 未创建）

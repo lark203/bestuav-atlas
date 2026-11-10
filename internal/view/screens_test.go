@@ -1,13 +1,18 @@
 package view
 
 import (
+	"bytes"
+	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/richtext"
 
 	"bestuav-atlas/internal/store"
 )
@@ -121,6 +126,83 @@ func TestScreenshots(t *testing.T) {
 			}
 		}
 	}
+
+	// 笔记页：左列表 + 右 Markdown 编辑/预览。
+	a.page = "notes"
+	a.notesOnEnter()
+	// 用临时数据目录放截图里的图片，避免污染真实 notes-media。
+	if runtime.GOOS == "windows" {
+		t.Setenv("LOCALAPPDATA", t.TempDir())
+	} else {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+	}
+	a.newNote()
+	first := a.notes.sel
+	a.notes.title = "发布检查清单"
+	a.notes.body = "# 发布前\n\n- [ ] 跑全量测试\n- [ ] 更新截图\n- [x] 写 CHANGELOG\n\n| 平台 | 状态 |\n|---|---|\n| Windows | 待验证 |\n| Linux | 待验证 |\n"
+	a.notes.tags = []string{"发布", "清单"}
+	// 一张 120×48 的红色示意图，验证预览能真正加载本地图片。
+	shot := image.NewRGBA(image.Rect(0, 0, 120, 48))
+	for y := 0; y < 48; y++ {
+		for x := 0; x < 120; x++ {
+			shot.Set(x, y, color.RGBA{R: 220, G: 60, B: 60, A: 255})
+		}
+	}
+	var shotBuf bytes.Buffer
+	_ = png.Encode(&shotBuf, shot)
+	a.noteAddImageBytesAt(shotBuf.Bytes(), "png", 0)
+	// 归属到第一个项目/仓库，展示关联信息。
+	if d := a.atlas(); len(d.projects) > 0 {
+		a.noteCurrent().ProjectID = d.projects[0].ID
+	}
+	if d := a.atlas(); len(d.repos) > 0 {
+		a.noteCurrent().RepoID = d.repos[0].ID
+	}
+	a.refreshNoteRelationSel()
+	a.saveNote(true)
+
+	a.newNote()
+	a.notes.title = "灵感：更快的关系图"
+	a.notes.body = "预取邻居的布局坐标，滚轮时只做插值。\n\n> 先量一下帧时间再决定。\n"
+	a.notes.tags = []string{"想法"}
+	a.saveNote(true)
+
+	// 富文本笔记：所见即所得编辑。
+	a.newNoteKind("rich")
+	a.notes.title = "富文本示例"
+	a.notes.body = "# 周会\n\n**结论**：先做 Markdown，再评估富文本。\n\n- 目标 1\n- 目标 2\n"
+	a.notes.richDoc = richtext.NewDocument(richtext.ParseMarkdown(a.notes.body))
+	a.saveNote(true)
+	save("atlas-notes-rich")
+
+	a.selectNote(first)
+	save("atlas-notes")
+	a.notes.reading = true
+	save("atlas-notes-read")
+	a.notes.reading = false
+
+	// 项目拓扑包含挂到项目上的笔记。
+	a.page = "topology"
+	if d := a.atlas(); len(d.projects) > 0 {
+		a.atlasUI.graphProject = d.projects[0].ID
+	}
+	a.atlasUI.graph.reset()
+	save("atlas-topology-notes")
+	// 全量图谱 / 项目卡 / 总览也重截：这时已有笔记节点与计数。
+	a.atlasUI.graphProject = 0
+	a.atlasUI.graph.reset()
+	save("atlas-graph-all")
+	a.page = "projects"
+	save("atlas-projects")
+	a.page = "home"
+	save("atlas-home")
+	a.page = "notes"
+
+	// 新建笔记的编辑器选择弹窗。
+	a.openNoteNewDialog()
+	save("atlas-notes-new")
+	a.notes.newDialog = false
+	a.closeAtlasDialog()
 
 	// 布局示例：页头 tab / 左右两栏（空态与选中态）。
 	a.page = "layout-tabs"

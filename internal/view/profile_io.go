@@ -34,8 +34,12 @@ func (a *App) profilePaths() (settingsPath, dbPath, dataDir string) {
 
 // exportProfile 弹出保存框并导出（withData=false 时只导出设置）。
 func (a *App) exportProfile(withData bool) {
-	settingsPath, dbPath, _ := a.profilePaths()
+	settingsPath, dbPath, dataDir := a.profilePaths()
 	bg := a.settings.BackgroundImage
+	mediaDir := ""
+	if dataDir != "" {
+		mediaDir = filepath.Join(dataDir, "notes-media")
+	}
 	go func() {
 		defer logging.Recover("export-profile")
 		name := "quantum-" + profile.DeviceName() + "-" + time.Now().Format("20060102") + profile.FileExt
@@ -56,6 +60,7 @@ func (a *App) exportProfile(withData bool) {
 			SettingsPath:  settingsPath,
 			DBPath:        dbPath,
 			Background:    bg,
+			MediaDir:      mediaDir,
 			IncludeData:   withData,
 			AppID:         appmeta.Identifier,
 			AppVersion:    appmeta.BuildVersion(),
@@ -67,13 +72,17 @@ func (a *App) exportProfile(withData bool) {
 				a.toast("导出失败：" + err.Error())
 				return
 			}
-			logging.Audit("profile", "导出配置与数据", "path", res.Path, "data", res.IncludesData)
+			logging.Audit("profile", "导出配置与数据", "path", res.Path, "data", res.IncludesData,
+				"media", res.IncludesMedia, "mediaFiles", res.MediaFiles)
 			parts := []string{"设置"}
 			if res.IncludesData {
 				parts = append(parts, "数据")
 			}
 			if res.IncludesImage {
 				parts = append(parts, "背景图")
+			}
+			if res.IncludesMedia {
+				parts = append(parts, fmt.Sprintf("笔记图片 %d 张", res.MediaFiles))
 			}
 			a.toast(fmt.Sprintf("已导出（%s）%s", strings.Join(parts, " + "), formatBytes(res.Bytes)))
 			a.requestFrame()
@@ -138,7 +147,7 @@ func (a *App) applyPendingImport() {
 		return
 	}
 	logging.Audit("profile", "导入配置与数据", "path", path,
-		"data", res.ImportedData, "image", res.ImportedImage,
+		"data", res.ImportedData, "image", res.ImportedImage, "media", res.ImportedMedia,
 		"settingsBackup", res.SettingsBackup, "dbBackup", res.DBBackup)
 	// 设置与数据库都被替换了：重启是最可靠的「重新加载」。
 	if a.win != nil {

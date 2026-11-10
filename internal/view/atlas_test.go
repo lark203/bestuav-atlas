@@ -538,7 +538,7 @@ func TestProjectTopologyDirectEdges(t *testing.T) {
 	if tt := ui.NewTester(func(c *ui.Context) { th = c.Theme() }, 40, 40); tt != nil {
 		tt.Frame()
 	}
-	nodes, edges := projectTopologyGraph(nil, nil, pid, th, "星图", d.projectRepos(pid), d.projectTodos(pid))
+	nodes, edges := projectTopologyGraph(nil, nil, pid, th, "星图", d.projectRepos(pid), d.projectTodos(pid), d.notes)
 	if len(nodes) < 2 {
 		t.Skip("没有子节点")
 	}
@@ -1381,5 +1381,49 @@ func TestTodoHeat(t *testing.T) {
 	dueToday, overdue := a.todoHeat()
 	if dueToday != 1 || overdue != 1 {
 		t.Fatalf("到期统计不对：today=%d overdue=%d，期望 1/1", dueToday, overdue)
+	}
+}
+
+// TestGraphLayoutNoOverlap 环布局（笔记/待办/仓库同时存在）不应留下重叠圆点。
+func TestGraphLayoutNoOverlap(t *testing.T) {
+	nodes := []graphNode{{label: "项目", r: 9, hub: true, tier: 0}}
+	for i := 0; i < 8; i++ {
+		nodes = append(nodes, graphNode{label: "仓库", r: 5, tier: 1})
+	}
+	for i := 0; i < 8; i++ {
+		nodes = append(nodes, graphNode{label: "待办", r: 5, tier: 2})
+	}
+	for i := 0; i < 8; i++ {
+		nodes = append(nodes, graphNode{label: "笔记", r: 5, tier: 3})
+	}
+	ringLayout(nodes, 900, 600, 30)
+	for i := 0; i < len(nodes); i++ {
+		for j := i + 1; j < len(nodes); j++ {
+			dx := nodes[i].x - nodes[j].x
+			dy := nodes[i].y - nodes[j].y
+			d := float32(math.Hypot(float64(dx), float64(dy)))
+			if d < nodes[i].r+nodes[j].r+12 {
+				t.Errorf("节点 %d/%d 重叠：距离 %.1f", i, j, d)
+			}
+		}
+	}
+}
+
+// TestSpreadNodesSeparates 同一位置的两个节点会被推开。
+func TestSpreadNodesSeparates(t *testing.T) {
+	nodes := []graphNode{
+		{r: 9, hub: true, x: 200, y: 200},
+		{r: 5, x: 200, y: 200},
+		{r: 5, x: 200, y: 200},
+	}
+	spreadNodes(nodes, 400, 400)
+	for i := 0; i < len(nodes); i++ {
+		for j := i + 1; j < len(nodes); j++ {
+			dx := nodes[i].x - nodes[j].x
+			dy := nodes[i].y - nodes[j].y
+			if d := float32(math.Hypot(float64(dx), float64(dy))); d < 12 {
+				t.Errorf("节点 %d/%d 仍未分开：%.1f", i, j, d)
+			}
+		}
 	}
 }

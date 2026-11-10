@@ -107,6 +107,20 @@ func navRegistry() []navGroup {
 					{icon: icons.Package, label: "新建项目", tip: "新建一个项目",
 						run: func(a *App) { a.openProjectDialog(store.Project{}) }},
 				}},
+			// 笔记：左列表 + 右编辑器（Markdown 原文 + 实时预览），数据在 note 表。
+			{id: "notes", label: "笔记", icon: icons.FileText, build: (*App).notesPage,
+				policy: pagePolicy{
+					keep:      keepCached,
+					onEnter:   func(a *App) { a.notesOnEnter() },
+					onLeave:   func(a *App) { a.notesOnLeave() },
+					onDestroy: func(a *App) { a.notesOnLeave(); a.notes = notesUI{} },
+				},
+				tools: []toolAction{
+					{icon: icons.Pencil, label: "新建笔记", tip: "新建笔记（Markdown / 富文本）",
+						run: func(a *App) { a.openNoteNewDialog() }},
+					{icon: icons.Image, label: "清理图片", tip: "删除没有被任何笔记引用的图片",
+						run: func(a *App) { a.cleanNoteMedia() }},
+				}},
 			{id: "repos", label: "仓库", icon: icons.Code, build: (*App).repoPage,
 				// 选中项与筛选条件要「切回来还在」，用缓存；闲置超时后由全局规则带走。
 				// 页头不再放工具按钮：导入/刷新在页面顶部已经各有一个入口，

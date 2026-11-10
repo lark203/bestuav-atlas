@@ -6,6 +6,7 @@
 //	settings.json   只含可移植字段（设备相关字段在导出时剔除）
 //	data.db         可选：VACUUM INTO 的一致性快照（任务 / 授权 / 页面状态）
 //	background.<ext> 可选：背景图（导入时复制到本机数据目录并改写路径）
+//	notes-media/*   可选：笔记里的图片（正文用相对路径引用）
 //	README.txt      说明包含什么、如何恢复
 //
 // 为什么整包而不是「直接同步 data.db」：SQLite 的 WAL 不能被两台机器同时写，
@@ -19,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -54,6 +56,7 @@ const (
 	dbName       = "data.db"
 	readmeName   = "README.txt"
 	bgPrefix     = "background"
+	mediaDirName = "notes-media"
 )
 
 // 导出时剔除的「设备相关」字段：导入后沿用本机值，而不是把旧机器的设置带过来。
@@ -84,6 +87,7 @@ type ExportOptions struct {
 	SettingsPath  string // settings.json 路径
 	DBPath        string // data.db 路径（可选）
 	Background    string // 背景图路径（可选）
+	MediaDir      string // 笔记图片目录（可选，导出为 notes-media/）
 	IncludeData   bool   // 是否导出 data.db
 	AppID         string
 	AppVersion    string
@@ -97,6 +101,8 @@ type ExportResult struct {
 	Bytes         int64
 	IncludesData  bool
 	IncludesImage bool
+	IncludesMedia bool // 是否带上了笔记图片
+	MediaFiles    int  // 笔记图片张数
 }
 
 // Export 写出一个配置包。
@@ -153,6 +159,29 @@ func Export(o ExportOptions) (ExportResult, error) {
 			}
 			includes = append(includes, "data")
 			res.IncludesData = true
+		}
+	}
+
+	// 笔记图片：整个 notes-media 目录进包（正文里的相对路径在导入后照样成立）。
+	mediaFiles := 0
+	var mediaList []string
+	if o.IncludeData && o.MediaDir != "" {
+		_ = filepath.WalkDir(o.MediaDir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			rel, rerr := filepath.Rel(o.MediaDir, p)
+			if rerr != nil {
+				return nil
+			}
+			mediaList = append(mediaList, rel)
+			mediaFiles++
+			return nil
+		})
+		if mediaFiles > 0 {
+			includes = append(includes, "media")
+			res.IncludesMedia = true
+			res.MediaFiles = mediaFiles
 		}
 	}
 
@@ -214,6 +243,12 @@ func Export(o ExportOptions) (ExportResult, error) {
 			return res, err
 		}
 	}
+	for _, rel := range mediaList {
+		if err := addFile(zw, filepath.Join(o.MediaDir, rel),
+			mediaDirName+"/"+filepath.ToSlash(rel)); err != nil {
+			return res, err
+		}
+	}
 	if err := zw.Close(); err != nil {
 		return res, err
 	}
@@ -250,6 +285,7 @@ type ImportResult struct {
 	DBBackup       string
 	ImportedData   bool
 	ImportedImage  bool
+	ImportedMedia  bool
 	BackgroundPath string
 }
 
@@ -305,8 +341,26 @@ func Import(o ImportOptions) (ImportResult, error) {
 	}
 	defer zr.Close()
 	hasDB := false
+	hasMedia := false
 	bgRel := ""
 	for _, f := range zr.File {
+		slash := filepath.ToSlash(f.Name)
+		if strings.HasPrefix(slash, mediaDirName+"/") {
+			rel := strings.TrimPrefix(slash, mediaDirName+"/")
+			// 只接受 notes-media/ 下的相对路径，杜绝 ../ 路径穿越。
+			if rel == "" || strings.Contains(rel, "..") || strings.HasPrefix(rel, "/") {
+				continue
+			}
+			dst := filepath.Join(tmpDir, mediaDirName, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return res, err
+			}
+			if err := extract(f, dst); err != nil {
+				return res, err
+			}
+			hasMedia = true
+			continue
+		}
 		name := filepath.Base(f.Name) // 只认包根，杜绝路径穿越
 		switch {
 		case name == settingsName:
@@ -369,6 +423,21 @@ func Import(o ImportOptions) (ImportResult, error) {
 			return res, fmt.Errorf("写入数据库失败: %w", err)
 		}
 		res.ImportedData = true
+	}
+
+	// 笔记图片：整目录替换（正文里的 notes-media/... 相对路径不变）。
+	if hasMedia {
+		if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
+			return res, err
+		}
+		dest := filepath.Join(o.DataDir, mediaDirName)
+		if _, statErr := os.Stat(dest); statErr == nil {
+			_ = os.Rename(dest, dest+".bak-"+ts)
+		}
+		if err := copyDirTree(filepath.Join(tmpDir, mediaDirName), dest); err != nil {
+			return res, fmt.Errorf("写入笔记图片失败: %w", err)
+		}
+		res.ImportedMedia = true
 	}
 
 	// 背景图：复制进本机数据目录，settings 里的路径指向新位置。
@@ -550,4 +619,22 @@ func readmeText(m Manifest) string {
 	b.WriteString("- 不含日志、窗口位置和「开机自启 / 多开」这类设备相关设置。\n")
 	b.WriteString("- 背景图片已随包携带；导入后会复制到本机数据目录并自动指向它。\n")
 	return b.String()
+}
+
+// copyDirTree 递归复制目录（跨盘时不能用 os.Rename，导入的临时目录常在系统盘）。
+func copyDirTree(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(src, p)
+		if rerr != nil {
+			return rerr
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		return copyFile(p, target)
+	})
 }

@@ -42,7 +42,9 @@ import (
 // 6：待办到期提醒的已通知时刻（notified_at）
 // 7：任务记录补充失败原因（detail）与真实耗时（duration_ms）
 // 8：待办新增计划开始日（start_at），支撑「今天要做」与桌面便签分时段视图
-const schemaVersion = "8"
+// 9：新增 note（笔记：Markdown 正文 + 标签 + 置顶）
+// 10：笔记补充归属项目/仓库与编辑器类型（editor = markdown | rich）
+const schemaVersion = "10"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -189,6 +191,19 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_app_event_ts ON app_event(ts DESC)`,
 		// 页面私有键值：页面 id + key 唯一；value 由调用方序列化（视图层用 JSON）。
+		`CREATE TABLE IF NOT EXISTS note (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			title      TEXT NOT NULL DEFAULT '',
+			body       TEXT NOT NULL DEFAULT '',
+			tags       TEXT NOT NULL DEFAULT '[]',
+			pinned     INTEGER NOT NULL DEFAULT 0,
+			project_id INTEGER NOT NULL DEFAULT 0,
+			repo_id    INTEGER NOT NULL DEFAULT 0,
+			editor     TEXT NOT NULL DEFAULT 'markdown',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_note_order ON note(pinned DESC, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS page_pref (
 			page       TEXT NOT NULL,
 			key        TEXT NOT NULL,
@@ -295,6 +310,11 @@ func (s *Store) addMissingColumns() error {
 		table string
 		cols  []addColumn
 	}{
+		{"note", []addColumn{
+			{"project_id", `project_id INTEGER NOT NULL DEFAULT 0`},
+			{"repo_id", `repo_id INTEGER NOT NULL DEFAULT 0`},
+			{"editor", `editor TEXT NOT NULL DEFAULT 'markdown'`},
+		}},
 		{"repo", []addColumn{
 			{"host", `host TEXT NOT NULL DEFAULT ''`},
 			{"importance", `importance INTEGER NOT NULL DEFAULT 0`},

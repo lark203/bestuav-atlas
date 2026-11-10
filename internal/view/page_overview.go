@@ -56,6 +56,7 @@ func (a *App) overviewPage(c *ui.Context, t *ui.Theme) {
 				display.Stat(c, "项目", float64(d.stats.Projects)).Grow(1)
 				display.Stat(c, "仓库", float64(d.stats.Repos)).Grow(1)
 				display.Stat(c, "需要处理", float64(needWork)).Grow(1)
+				display.Stat(c, "笔记", float64(len(d.notes))).Grow(1)
 			})
 		})
 

@@ -175,6 +175,7 @@ func (a *App) openImportDialog() {
 
 // openGraphDialog 进入「关系图谱」整页：全部项目 / 仓库 / 待办的总览。
 func (a *App) openGraphDialog() {
+	a.reloadAtlas() // 笔记可能在笔记页改过，拓扑要用最新数据
 	a.atlasUI.graphProject = 0
 	a.atlasUI.graph.reset()
 	logging.Info("graph", "打开关系图谱", "scope", "all")
@@ -183,6 +184,7 @@ func (a *App) openGraphDialog() {
 
 // openProjectGraph 进入某个项目的「拓扑图」整页：项目在正中、仓库/待办围绕它发散。
 func (a *App) openProjectGraph(projectID int64) {
+	a.reloadAtlas() // 同上：关联笔记可能刚编辑过
 	a.atlasUI.graphProject = projectID
 	a.atlasUI.graph.reset()
 	logging.Info("graph", "打开项目拓扑", "project", projectID)
@@ -308,6 +310,8 @@ func (a *App) atlasDialogs(c *ui.Context, t *ui.Theme) {
 		a.commitDialog(c, t)
 	case "erase":
 		a.eraseDialog(c, t)
+	case "note-new":
+		a.noteNewDialog(c, t)
 	}
 }
 
@@ -648,7 +652,7 @@ func (a *App) topologyPage(c *ui.Context, t *ui.Theme) {
 			g.pointerX, g.pointerY = mx, my
 			area.Draw(func(p *ui.Painter, r ui.Rect) {
 				if pid != 0 {
-					a.drawProjectTopology(p, r, t, pid, d.projectName(pid), d.projectRepos(pid), d.projectTodos(pid))
+					a.drawProjectTopology(p, r, t, pid, d.projectName(pid), d.projectRepos(pid), d.projectTodos(pid), d.notes)
 				} else {
 					a.drawAtlasGraph(p, r, t, d)
 				}
@@ -689,7 +693,7 @@ type graphNode struct {
 //
 // dstNodes/dstEdges 是复用缓冲（传 g.nodesBuf[:0] / g.edgesBuf[:0]）：拓扑图每帧
 // 都要重建模型，按帧分配两个切片会持续制造短命垃圾。
-func projectTopologyGraph(dstNodes []graphNode, dstEdges [][2]int, projectID int64, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo) ([]graphNode, [][2]int) {
+func projectTopologyGraph(dstNodes []graphNode, dstEdges [][2]int, projectID int64, t *ui.Theme, projectName string, repos []store.Repo, todos []store.Todo, notes []store.Note) ([]graphNode, [][2]int) {
 	const capEach = 24 // 节点太多会糊成一团，超量截断（先在项目卡上看到总数）
 	nodes := dstNodes[:0]
 	edges := dstEdges[:0]
@@ -717,13 +721,34 @@ func projectTopologyGraph(dstNodes []graphNode, dstEdges [][2]int, projectID int
 		nodes = append(nodes, graphNode{label: td.Title, color: col, r: 5, kind: gkTodo, id: td.ID})
 		edges = append(edges, [2]int{0, idx})
 	}
+	// 笔记：直接挂到本项目、或挂到本项目下某个仓库的笔记，都画一条自己的线。
+	repoSet := make(map[int64]bool, len(repos))
+	for _, rp := range repos {
+		repoSet[rp.ID] = true
+	}
+	var linked []store.Note
+	for _, nt := range notes {
+		if nt.ProjectID == projectID || repoSet[nt.RepoID] {
+			linked = append(linked, nt)
+		}
+	}
+	if len(linked) > capEach {
+		linked = linked[:capEach]
+	}
+	for _, nt := range linked {
+		idx := len(nodes)
+		nodes = append(nodes, graphNode{
+			label: noteDisplayTitle(nt), color: t.Warning, r: 5, kind: gkNote, id: nt.ID,
+		})
+		edges = append(edges, [2]int{0, idx})
+	}
 	return nodes, edges
 }
 
 // drawProjectTopology 项目拓扑：以该项目为中枢，仓库与待办作为周围节点。
-func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectID int64, projectName string, repos []store.Repo, todos []store.Todo) {
+func (a *App) drawProjectTopology(p *ui.Painter, r ui.Rect, t *ui.Theme, projectID int64, projectName string, repos []store.Repo, todos []store.Todo, notes []store.Note) {
 	g := &a.atlasUI.graph
-	nodes, edges := projectTopologyGraph(g.nodesBuf[:0], g.edgesBuf[:0], projectID, t, projectName, repos, todos)
+	nodes, edges := projectTopologyGraph(g.nodesBuf[:0], g.edgesBuf[:0], projectID, t, projectName, repos, todos, notes)
 	g.nodesBuf, g.edgesBuf = nodes, edges
 	a.drawNodeGraph(p, r, t, nodes, edges, false)
 }
@@ -813,11 +838,13 @@ func ringLayout(nodes []graphNode, w, h, pad float32) {
 	fracOf := func(tier int) float32 {
 		switch tier {
 		case 0:
-			return 0.30
+			return 0.26
 		case 1:
-			return 0.66
+			return 0.56
+		case 2:
+			return 0.78 // 待办
 		default:
-			return 0.98
+			return 0.99 // 笔记等最外层
 		}
 	}
 	seen := map[int]int{}
@@ -866,6 +893,54 @@ func clampNodesToCanvas(nodes []graphNode, w, h float32) {
 	for i := range nodes {
 		nodes[i].x = clampf(nodes[i].x, xm, w-xm)
 		nodes[i].y = clampf(nodes[i].y, 26, h-32)
+	}
+	spreadNodes(nodes, w, h)
+}
+
+// spreadNodes 在布局/夹取之后做一次确定性的「互斥」：两节点距离小于圆心距之和时
+// 沿连线各推开一半，迭代若干轮。环布局里笔记与待办可能落在相近半径，加上边缘
+// 夹取会把多个节点压到同一条边上，圆点就会叠在一起；这里把重叠推开。
+// 中枢 nodes[0] 尽量不动（只把对方推远），保持「项目在正中」的观感。
+func spreadNodes(nodes []graphNode, w, h float32) {
+	if len(nodes) < 3 {
+		return
+	}
+	const margin float32 = 38
+	for iter := 0; iter < 60; iter++ {
+		moved := false
+		for i := 0; i < len(nodes); i++ {
+			for j := i + 1; j < len(nodes); j++ {
+				minD := nodes[i].r + nodes[j].r + 18
+				dx := nodes[j].x - nodes[i].x
+				dy := nodes[j].y - nodes[i].y
+				d := float32(math.Hypot(float64(dx), float64(dy)))
+				if d >= minD {
+					continue
+				}
+				if d < 0.01 {
+					dx, dy, d = 0, 1, 1
+				}
+				push := (minD - d) / 2
+				ux, uy := dx/d, dy/d
+				if i == 0 {
+					nodes[j].x += ux * push * 2
+					nodes[j].y += uy * push * 2
+				} else {
+					nodes[i].x -= ux * push
+					nodes[i].y -= uy * push
+					nodes[j].x += ux * push
+					nodes[j].y += uy * push
+				}
+				moved = true
+			}
+		}
+		for k := range nodes {
+			nodes[k].x = clampFloat(nodes[k].x, margin, w-margin)
+			nodes[k].y = clampFloat(nodes[k].y, 30, h-34)
+		}
+		if !moved {
+			return
+		}
 	}
 }
 
@@ -961,7 +1036,7 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 
 	// 连线（先画，压在圆点下面）。每条边一条独立曲线：同中枢的多条线不会叠成一条。
 	curveBuf := g.curveBuf[:0]
-	for k, e := range edges {
+	for _, e := range edges {
 		if e[0] < 0 || e[1] < 0 || e[0] >= len(nodes) || e[1] >= len(nodes) {
 			continue
 		}
@@ -983,15 +1058,11 @@ func (a *App) drawNodeGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, nodes []graph
 				width = maxFloat(width, clampFloat(1.6*g.zoom, 1.1, 3))
 			}
 		}
-		// 相邻边交替朝两弯：从同一个中枢出发的多条线因此散成扇形，而不是一根粗线。
-		bend := float32(0.11)
-		if k%2 == 1 {
-			bend = -bend
-		}
+		// 直线连接：曲线在节点密集时容易互相重叠，直线更清楚。
 		curveBuf = graphCurve(p, curveBuf,
 			r.X+pts[e[0]][0], r.Y+pts[e[0]][1], clampFloat(nodes[e[0]].r*g.zoom, 2.5, 24),
 			r.X+pts[e[1]][0], r.Y+pts[e[1]][1], clampFloat(nodes[e[1]].r*g.zoom, 2.5, 24),
-			bend, width, col)
+			0, width, col)
 	}
 	g.curveBuf = curveBuf[:0]
 
@@ -1070,7 +1141,7 @@ func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView
 	}
 
 	// 沿边跑的亮点：只画「父层 → 子层」方向的边，避免同一跳跑两遍。
-	for k, e := range edges {
+	for _, e := range edges {
 		pa, pb := nodes[e[0]], nodes[e[1]]
 		da, oka := g.pulse.depths[graphKey{kind: pa.kind, id: pa.id, label: pa.label}]
 		db, okb := g.pulse.depths[graphKey{kind: pb.kind, id: pb.id, label: pb.label}]
@@ -1088,14 +1159,10 @@ func (a *App) drawGraphPulse(p *ui.Painter, r ui.Rect, t *ui.Theme, g *graphView
 		if prog < 0 || prog > 1 {
 			continue
 		}
-		bend := float32(0.11)
-		if k%2 == 1 {
-			bend = -bend
-		}
 		sx, sy, cx, cy, ex, ey := graphCurvePoints(
 			r.X+pts[from][0], r.Y+pts[from][1], clampFloat(nodes[from].r*g.zoom, 2.5, 24),
 			r.X+pts[to][0], r.Y+pts[to][1], clampFloat(nodes[to].r*g.zoom, 2.5, 24),
-			bend)
+			0)
 		// 每条边两颗亮点（当前 + 拖尾）。不用 []float32{...} 字面量：那是每边每帧
 		// 一次额外分配，缩放/悬停时帧率高，堆上会有明显的短命垃圾。
 		pulseDotAt := func(at float32) {
@@ -1215,6 +1282,25 @@ func (a *App) drawAtlasGraph(p *ui.Painter, r ui.Rect, t *ui.Theme, d *atlasCach
 			edges = append(edges, [2]int{ri, idx})
 		} else if pi, ok := projIdx[td.ProjectID]; ok {
 			edges = append(edges, [2]int{pi, idx})
+		} else {
+			edges = append(edges, [2]int{getUnassigned(), idx})
+		}
+	}
+
+	// 笔记：项目笔记连项目，仓库笔记连仓库，其余归到「未归属」。
+	notes := d.notes
+	if len(notes) > 60 {
+		notes = notes[:60]
+	}
+	for _, nt := range notes {
+		idx := len(nodes)
+		nodes = append(nodes, graphNode{
+			label: noteDisplayTitle(nt), color: t.Warning, r: 5, tier: 3, kind: gkNote, id: nt.ID,
+		})
+		if pi, ok := projIdx[nt.ProjectID]; ok {
+			edges = append(edges, [2]int{pi, idx})
+		} else if ri, ok := repoIdx[nt.RepoID]; ok {
+			edges = append(edges, [2]int{ri, idx})
 		} else {
 			edges = append(edges, [2]int{getUnassigned(), idx})
 		}

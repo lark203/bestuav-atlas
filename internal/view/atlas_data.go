@@ -98,6 +98,7 @@ type atlasCache struct {
 	projects []store.Project
 	repos    []store.Repo
 	todos    []store.Todo
+	notes    []store.Note
 	stats    store.AtlasStats
 	loaded   bool
 	err      error
@@ -111,7 +112,7 @@ func (a *App) atlas() *atlasCache {
 	}
 	d.loaded = true
 	d.err = nil
-	d.projects, d.repos, d.todos = nil, nil, nil
+	d.projects, d.repos, d.todos, d.notes = nil, nil, nil, nil
 	d.stats = store.AtlasStats{}
 	if a.store == nil {
 		// 安全模式 / 数据库打开失败：不把页面变成错误页，只让数据为空，
@@ -129,6 +130,10 @@ func (a *App) atlas() *atlasCache {
 	}
 	if d.todos, err = a.store.ListTodos(); err != nil {
 		d.err = fmt.Errorf("读取待办失败: %w", err)
+		return d
+	}
+	if d.notes, err = a.store.ListNotes(); err != nil {
+		d.err = fmt.Errorf("读取笔记失败: %w", err)
 		return d
 	}
 	if d.stats, err = a.store.AtlasStats(); err != nil {
@@ -225,6 +230,26 @@ func (d *atlasCache) projectTodos(projectID int64) []store.Todo {
 		return out[i].Title < out[j].Title
 	})
 	return out
+}
+
+// noteCountOf 项目下的笔记数：直接挂项目的 + 挂到项目下仓库的。
+func (d *atlasCache) noteCountOf(projectID int64) int {
+	if projectID == 0 {
+		return 0
+	}
+	repos := make(map[int64]bool, 8)
+	for _, r := range d.repos {
+		if r.ProjectID == projectID {
+			repos[r.ID] = true
+		}
+	}
+	n := 0
+	for _, nt := range d.notes {
+		if nt.ProjectID == projectID || repos[nt.RepoID] {
+			n++
+		}
+	}
+	return n
 }
 
 // projectOptions 下拉框选项：第一项固定为「未归属」。

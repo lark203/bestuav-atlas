@@ -58,6 +58,7 @@ func (a *App) projectCard(c *ui.Context, t *ui.Theme, p store.Project) {
 	d := a.atlas()
 	repos := d.repoCountOf(p.ID)
 	todos := d.openTodoCountOf(p.ID)
+	notes := d.noteCountOf(p.ID)
 
 	kit.Card(c, t, func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Wrap().Children(func() {
@@ -77,6 +78,7 @@ func (a *App) projectCard(c *ui.Context, t *ui.Theme, p store.Project) {
 			}
 			stat(icons.Code, repos, "仓库")
 			stat(icons.Checklist, todos, "待办")
+			stat(icons.FileText, notes, "笔记")
 		})
 
 		// 仓库名：只列前三个，多出来的用「+N」带过——卡片不是清单，点进仓库页看全量。

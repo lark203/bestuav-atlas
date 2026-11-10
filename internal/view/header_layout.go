@@ -1,6 +1,8 @@
 package view
 
 import (
+	"fmt"
+
 	"github.com/ELY-Open-Source/CrychicUI/choice"
 	"github.com/egoist/mygo/ui"
 )
@@ -32,6 +34,11 @@ func (a *App) pageSubtitle() string {
 			return demoProjects[a.demoSel-1].name
 		}
 		return "未选择"
+	case "notes":
+		if n := a.noteCurrent(); n != nil {
+			return noteDisplayTitle(*n)
+		}
+		return fmt.Sprintf("%d 篇笔记", len(a.notes.list))
 	}
 	return ""
 }
@@ -88,7 +95,7 @@ func (a *App) pageTabs() ([]string, int, func(int)) {
 
 // pageFill 是否需要「内容区不套统一滚动」：三段式布局自己管左右两栏的滚动。
 func (a *App) pageFill() bool {
-	return a.page == "layout-split"
+	return a.page == "layout-split" || a.page == "notes"
 }
 
 // demoProjects 布局示例用的静态数据（不碰数据库，纯展示）。
