@@ -157,6 +157,10 @@
 bestuav-atlas/
 ├── main.go                    # 入口：日志 → 数据库 → 单实例锁 → 窗口/托盘
 ├── mygo.json                  # 打包与自动更新配置
+├── mobile/                    # 手机端 Go 内核入口（gomobile 绑定，不含 UI）
+├── cmd/atlas-sync/            # 同步服务（单二进制；部署件在 deploy/）
+├── deploy/                    # Dockerfile + docker-compose + Caddyfile（自动 HTTPS）
+│   └── vps/                   # 已有 1Panel/openresty 的机器：预编译二进制 + 反代（见 README）
 ├── internal/
 │   ├── view/
 │   │   ├── registry.go        # ★ 菜单/页面/页头按钮的唯一注册处
@@ -171,6 +175,9 @@ bestuav-atlas/
 │   │   ├── settings_atlas.go  # 设置页「工作区」区块
 │   │   └── shell/             # 侧栏与内容区骨架（不认识业务）
 │   ├── store/                 # SQLite：project / repo / todo + 任务/事件/页面状态
+│   ├── syncwire/              # 桌面/手机/同步服务共用的传输结构（只有 JSON 契约）
+│   ├── syncsvc/               # 同步服务端：协议、设备令牌、变更日志与 head 合并
+│   ├── syncclient/            # 同步客户端：HTTP + 一轮「推上去、拉回来」
 │   ├── gitx/                  # 本地 git：Inspect / Fetch / Pull / CommitAll / Push / Clone
 │   ├── forge/                 # 代码托管平台：GitHub / Gitee / Gitea / AtomGit
 │   ├── readme/                # 读本地仓库根目录的 README
@@ -182,13 +189,15 @@ bestuav-atlas/
 
 开发专题：[定时刷新与页头按钮](docs/定时刷新与页头按钮.md)（自动刷新触发链、页面缓存关系、给新页面加页头按钮的两种方式）。
 
-## 七、数据模型（SQLite schema v6）
+## 七、数据模型（SQLite schema v11）
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | `project` | name / desc / status | 状态：进行中 / 暂停 / 归档 |
 | `repo` | **host** / project_id / name / url / local_path / branch / status / dirty / ahead / behind / last_commit / **importance / learning / difficulty / review** | 一行 = 一个仓库登记；host 决定平台（GitHub/Gitee/Gitea/AtomGit） |
 | `todo` | title / note / project_id / repo_id / priority / **important / urgent** / status / due_at / done_at / **notified_at** | 优先级 0 低 1 中 2 高；重要×紧急 决定四象限；notified_at 记录到期提醒是否已发 |
+| `sync_op` | op_id / entity / uid / kind / payload / **sent_at** / created_at | 跨设备变更日志；sent_at 为空 = 待推送（outbox），payload 只含改动字段 |
+| `sync_state` | key / value | 同步水位（last_seq）等本机状态 |
 
 时间统一存 UTC RFC3339Nano 字符串，零值存空串；`store` 单连接串行化，避免 SQLITE_BUSY。
 老库（v3 / v4）打开时按 `PRAGMA table_info` 缺列自动 `ALTER TABLE`，不需要手工迁移。
@@ -249,6 +258,8 @@ go run .                    # 直接跑
 go test ./...               # 全部测试（含 gitx/github/store/view 的离线用例）
 go build ./...              # 编译检查
 go tool mygo build          # 打包（三平台，见 scripts/）
+./scripts/bind-core.ps1     # 手机端内核（Android aar；iOS 需 macOS/CI）
+go build -o build/atlas-sync.exe ./cmd/atlas-sync   # 同步服务（部署见 deploy/）
 ```
 
 截图（离屏渲染，不需要显示器）：

@@ -69,6 +69,8 @@ var machineKeys = []string{
 	"repoKind", "repoBaseURL", "repoToken", "repoOwner", "repoRepo",
 	"repoBranch", "repoPath", "repoLast",
 	"githubToken", "giteeToken", "atomGitToken", "giteaHost", "giteaToken",
+	// 跨设备同步的地址与两组令牌同理：换台机器要重新连，令牌更不能随包走。
+	"syncEnabled", "syncURL", "syncDeviceID", "syncToken", "syncAdminToken", "syncLastAt",
 }
 
 // preservedKeys 导入时保留「本机当前值」的设备相关字段：包里的这些键已被剔除，
@@ -79,6 +81,7 @@ var preservedKeys = []string{
 	"repoKind", "repoBaseURL", "repoToken", "repoOwner", "repoRepo",
 	"repoBranch", "repoPath", "repoLast",
 	"githubToken", "giteeToken", "atomGitToken", "giteaHost", "giteaToken",
+	"syncEnabled", "syncURL", "syncDeviceID", "syncToken", "syncAdminToken", "syncLastAt",
 }
 
 // ExportOptions 导出参数。

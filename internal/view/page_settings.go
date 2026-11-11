@@ -35,6 +35,7 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 		workspace := group == settingsGroupWorkspace
 		shortcuts := group == settingsGroupShortcuts
 		about := group == settingsGroupAbout
+		syncGroup := group == settingsGroupSync
 		pages := group == settingsGroupPages
 
 		// ===== 工作区（仓库管理的本机参数）=====
@@ -289,6 +290,12 @@ func (a *App) settingsPage(c *ui.Context, t *ui.Theme) {
 			a.updateSection(c, t)
 		}
 
+		// ===== 同步（跨设备）=====
+		// 单独一页：它有自己的三种凭据与状态，和外观/仓库配置都不该混在一起。
+		if syncGroup {
+			a.syncSection(c, t)
+		}
+
 		if pages {
 			// ===== 页面 =====
 			// 各页面在注册表里用 navItem.settings 声明自己的设置项，这里按注册表顺序
@@ -314,6 +321,7 @@ const (
 	settingsGroupWorkspace        // 工作区：仓库根目录 + 各平台令牌
 	settingsGroupShortcuts        // 快捷键
 	settingsGroupAbout            // 关于与诊断
+	settingsGroupSync             // 同步：自建 atlas-sync 服务与手机配对
 	settingsGroupPages            // 页面：各页面自己声明的设置（没有时不显示这一页）
 )
 
@@ -323,7 +331,7 @@ const (
 // 对用户没有意义，还会让别人以为页面设置是必须的。页面是否注册在编译期就定了，
 // 所以这个列表在一次运行里不会变。
 func settingsGroupLabels() []string {
-	labels := []string{"常规", "工作区", "快捷键", "关于与诊断"}
+	labels := []string{"常规", "工作区", "快捷键", "关于与诊断", "同步"}
 	if len(pageSettingItems()) > 0 {
 		labels = append(labels, "页面")
 	}
@@ -350,9 +358,9 @@ func (a *App) setSettingsGroup(g int) {
 
 // settingsGroupKey 当前分组在页面私有状态里的键名。
 //
-// 带 -v2：分组顺序在 v0.3.0 变过（插入「工作区」），旧的下标会被解读成别的页，
-// 换个键名等于「老用户这次回到默认页」，比停在一个奇怪的页面上好。
-const settingsGroupKey = "group-v2"
+// 带 -v3：分组顺序变过两次（v0.3.0 插入「工作区」，本次插入「同步」），旧的下标
+// 会被解读成别的页；换个键名等于「老用户这次回到默认页」，比停在一个奇怪的页面上好。
+const settingsGroupKey = "group-v3"
 
 // settingsOpenKey 分区折叠状态在页面私有状态里的键名。
 const settingsOpenKey = "section-open"

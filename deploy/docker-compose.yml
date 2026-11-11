@@ -1,0 +1,52 @@
+# 云主机部署：atlas-sync + Caddy（自动 HTTPS）。
+#
+# 用法见同目录 README.md：
+#   cp .env.example .env   # 填域名与管理员令牌
+#   docker compose up -d --build
+#
+# 数据只有 ./data/atlas-sync.db 一个文件；备份 = 停容器拷贝它，或在线 VACUUM INTO。
+
+services:
+  atlas-sync:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: ${ATLAS_SYNC_VERSION:-dev}
+    image: bestuav/atlas-sync:${ATLAS_SYNC_VERSION:-dev}
+    environment:
+      # 必需：没有它无法生成配对码、也无法登记新设备（服务仍能收已有设备的同步）。
+      ATLAS_SYNC_ADMIN_TOKEN: ${ATLAS_SYNC_ADMIN_TOKEN:?请在 .env 里设置 ATLAS_SYNC_ADMIN_TOKEN}
+      ATLAS_SYNC_DB: /data/atlas-sync.db
+      ATLAS_SYNC_LISTEN: :7420
+    volumes:
+      - ./data:/data
+    # 不映射到宿主机：只有 caddy 通过内部网络访问它。
+    expose:
+      - "7420"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7420/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - atlas-sync
+    environment:
+      SYNC_DOMAIN: ${SYNC_DOMAIN:?请在 .env 里设置 SYNC_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

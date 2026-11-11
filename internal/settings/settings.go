@@ -101,6 +101,22 @@ type Settings struct {
 	GiteaHost    string `json:"giteaHost"`
 	GiteaToken   string `json:"giteaToken"`
 
+	// ---- 跨设备同步 ----
+	// 同步服务是自建的 atlas-sync（cmd/atlas-sync），单用户、单实例。
+	// 设备令牌与管理员令牌都只存本机，不随配置包导出（见 internal/profile）。
+	// SyncEnabled 关掉时后台不联网，但已产生的变更保留在 outbox 里，下次开启继续推。
+	SyncEnabled bool `json:"syncEnabled"`
+	// SyncURL 服务地址，如 http://127.0.0.1:7420 或 https://sync.example.com。
+	SyncURL string `json:"syncURL"`
+	// SyncDeviceID 本机在服务端的设备 id（只用于展示与排障）。
+	SyncDeviceID string `json:"syncDeviceID"`
+	// SyncToken 本机设备令牌（服务端只存它的 SHA-256）。
+	SyncToken string `json:"syncToken"`
+	// SyncAdminToken 管理员令牌：只用于「连接服务」「生成配对码」，与设备令牌是两回事。
+	SyncAdminToken string `json:"syncAdminToken"`
+	// SyncLastAt 上次同步完成的本地时间（展示文本，不参与逻辑）。
+	SyncLastAt string `json:"syncLastAt"`
+
 	// ---- 伴生桌宠 ----
 	// PetEnabled 是否显示桌宠（无边框透明置顶小窗，见 internal/view/pet.go）。
 	PetEnabled bool `json:"petEnabled"`
@@ -467,6 +483,14 @@ func normalize(s *Settings) {
 	// 自动刷新间隔只接受预设的几档；老文件缺字段/手改坏值都回落到默认。
 	if !slices.Contains(RepoRefreshMinutes, s.RepoAutoRefreshMinutes) {
 		s.RepoAutoRefreshMinutes = DefaultRepoAutoRefreshMinutes
+	}
+	// 同步服务地址与令牌：去掉首尾空白与末尾斜杠（令牌带空格是最常见的粘贴事故）。
+	s.SyncURL = strings.TrimRight(strings.TrimSpace(s.SyncURL), "/")
+	s.SyncToken = strings.TrimSpace(s.SyncToken)
+	s.SyncAdminToken = strings.TrimSpace(s.SyncAdminToken)
+	s.SyncDeviceID = strings.TrimSpace(s.SyncDeviceID)
+	if s.SyncURL == "" || s.SyncToken == "" {
+		s.SyncEnabled = false // 没配好就不该有后台线程去撞网络
 	}
 }
 

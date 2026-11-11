@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"bestuav-atlas/internal/syncwire"
 )
 
 // 本文件是「项目 / 仓库 / 待办」三张业务表的持久化层。
@@ -19,7 +21,9 @@ import (
 
 // Project 一个项目（业务上的归类容器）。
 type Project struct {
-	ID        int64
+	ID int64
+	// UID 是跨设备身份（ULID）。ID 只在本机有效，同步一律用 UID。
+	UID       string
 	Name      string
 	Desc      string
 	Status    string // 进行中 / 暂停 / 归档
@@ -59,7 +63,10 @@ type Repo struct {
 
 // Todo 一条待办。
 type Todo struct {
-	ID        int64
+	ID int64
+	// UID 是跨设备身份（ULID）。手机离线新建的待办也能有稳定身份，
+	// 不必等落库拿到自增 id。
+	UID       string
 	Title     string
 	Note      string
 	ProjectID int64
@@ -86,12 +93,12 @@ type Todo struct {
 //
 // project 的 "desc" 带双引号：DESC 是 SQLite 关键字。
 const (
-	projectColumns = `id, name, "desc", status, created_at, updated_at`
+	projectColumns = `id, uid, name, "desc", status, created_at, updated_at`
 	repoColumns    = `id, project_id, name, url, host, local_path, branch, note,
 		importance, learning, difficulty, review,
 		status, status_msg, dirty, ahead, behind, last_commit, last_commit_at,
 		checked_at, created_at, updated_at`
-	todoColumns = `id, title, note, project_id, repo_id, priority, important, urgent,
+	todoColumns = `id, uid, title, note, project_id, repo_id, priority, important, urgent,
 		status, start_at, due_at, done_at, notified_at, created_at, updated_at`
 )
 
@@ -115,7 +122,7 @@ func timeText(t time.Time) string {
 func scanProject(r rowScanner) (Project, error) {
 	var p Project
 	var created, updated string
-	if err := r.Scan(&p.ID, &p.Name, &p.Desc, &p.Status, &created, &updated); err != nil {
+	if err := r.Scan(&p.ID, &p.UID, &p.Name, &p.Desc, &p.Status, &created, &updated); err != nil {
 		return Project{}, err
 	}
 	p.CreatedAt = parseTime(created)
@@ -142,7 +149,7 @@ func scanRepo(r rowScanner) (Repo, error) {
 func scanTodo(r rowScanner) (Todo, error) {
 	var t Todo
 	var start, due, done, notified, created, updated string
-	if err := r.Scan(&t.ID, &t.Title, &t.Note, &t.ProjectID, &t.RepoID,
+	if err := r.Scan(&t.ID, &t.UID, &t.Title, &t.Note, &t.ProjectID, &t.RepoID,
 		&t.Priority, &t.Important, &t.Urgent, &t.Status, &start, &due, &done, &notified,
 		&created, &updated); err != nil {
 		return Todo{}, err
@@ -198,15 +205,29 @@ func (s *Store) CreateProject(p Project) (int64, error) {
 	if strings.TrimSpace(p.Name) == "" {
 		return 0, fmt.Errorf("store: 项目名称不能为空")
 	}
-	now := nowText()
-	res, err := s.db.Exec(
-		`INSERT INTO project(name, "desc", status, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?)`,
-		p.Name, p.Desc, p.Status, now, now)
-	if err != nil {
-		return 0, fmt.Errorf("store: 写入项目失败: %w", err)
+	now := time.Now()
+	if p.UID == "" {
+		p.UID = newUID() // 手机离线新建时已带 uid，这里只补桌面本地新建的
 	}
-	return res.LastInsertId()
+	p.CreatedAt, p.UpdatedAt = now, now
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("store: 开始事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := insertProject(tx, p)
+	if err != nil {
+		return 0, err
+	}
+	if err := appendOp(tx, syncwire.EntityProject, p.UID, syncwire.KindCreate, projectCreatePatch(p)); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: 提交新建项目失败: %w", err)
+	}
+	return id, nil
 }
 
 // UpdateProject 覆盖项目的可编辑字段；created_at 保持原值，updated_at 刷新为当前时间。
@@ -217,12 +238,42 @@ func (s *Store) UpdateProject(p Project) error {
 	if strings.TrimSpace(p.Name) == "" {
 		return fmt.Errorf("store: 项目名称不能为空")
 	}
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: 开始事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	old, ok, err := selectProject(tx, p.ID)
+	if err != nil {
+		return err
+	}
+	now := nowText()
+	if _, err := tx.Exec(
 		`UPDATE project SET name = ?, "desc" = ?, status = ?, updated_at = ?
 		  WHERE id = ?`,
-		p.Name, p.Desc, p.Status, nowText(), p.ID)
-	if err != nil {
+		p.Name, p.Desc, p.Status, now, p.ID); err != nil {
 		return fmt.Errorf("store: 更新项目失败: %w", err)
+	}
+	if ok {
+		patch := map[string]any{}
+		if old.Name != p.Name {
+			patch["name"] = p.Name
+		}
+		if old.Desc != p.Desc {
+			patch["desc"] = p.Desc
+		}
+		if old.Status != p.Status {
+			patch["status"] = p.Status
+		}
+		if len(patch) > 0 {
+			if err := appendOp(tx, syncwire.EntityProject, old.UID, syncwire.KindPatch, patch); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交更新项目失败: %w", err)
 	}
 	return nil
 }
@@ -242,14 +293,51 @@ func (s *Store) DeleteProject(id int64) error {
 	// Commit 之后 Rollback 是空操作，这样写省掉每个错误分支的重复回滚。
 	defer func() { _ = tx.Rollback() }()
 
+	// 先把待办 uid 取完并关掉游标：同一个事务只占一根连接，
+	// 游标没关就继续 Exec 会自己等自己。
+	rows, err := tx.Query(`SELECT uid FROM todo WHERE project_id = ? AND uid <> ''`, id)
+	if err != nil {
+		return fmt.Errorf("store: 查询项目下的待办失败: %w", err)
+	}
+	var childUIDs []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			rows.Close()
+			return fmt.Errorf("store: 读取待办 uid 失败: %w", err)
+		}
+		childUIDs = append(childUIDs, uid)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(`UPDATE repo SET project_id = 0 WHERE project_id = ?`, id); err != nil {
 		return fmt.Errorf("store: 解除仓库与项目的关联失败: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE todo SET project_id = 0 WHERE project_id = ?`, id); err != nil {
 		return fmt.Errorf("store: 解除待办与项目的关联失败: %w", err)
 	}
+	// 子项改成「未归类」也要各发一条补丁，否则别的设备上它们会一直挂着已删项目。
+	for _, uid := range childUIDs {
+		if err := appendOp(tx, syncwire.EntityTodo, uid, syncwire.KindPatch,
+			map[string]any{"project_uid": ""}); err != nil {
+			return err
+		}
+	}
+
+	var projectUID string
+	if err := tx.QueryRow(`SELECT uid FROM project WHERE id = ?`, id).Scan(&projectUID); err != nil &&
+		err != sql.ErrNoRows {
+		return fmt.Errorf("store: 查询项目 uid 失败: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM project WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: 删除项目失败: %w", err)
+	}
+	if projectUID != "" {
+		if err := appendOp(tx, syncwire.EntityProject, projectUID, syncwire.KindDelete, nil); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: 提交删除项目事务失败: %w", err)
@@ -471,17 +559,33 @@ func (s *Store) CreateTodo(t Todo) (int64, error) {
 	if strings.TrimSpace(t.Title) == "" {
 		return 0, fmt.Errorf("store: 待办标题不能为空")
 	}
-	now := nowText()
-	res, err := s.db.Exec(
-		`INSERT INTO todo(title, note, project_id, repo_id, priority, important, urgent, status,
-		                  start_at, due_at, done_at, notified_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent, t.Status,
-		timeText(t.StartAt), timeText(t.DueAt), timeText(t.DoneAt), timeText(t.NotifiedAt), now, now)
-	if err != nil {
-		return 0, fmt.Errorf("store: 写入待办失败: %w", err)
+	now := time.Now()
+	if t.UID == "" {
+		t.UID = newUID()
 	}
-	return res.LastInsertId()
+	t.CreatedAt, t.UpdatedAt = now, now
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("store: 开始事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := insertTodo(tx, t)
+	if err != nil {
+		return 0, err
+	}
+	patch, err := todoFullPatch(tx, t)
+	if err != nil {
+		return 0, err
+	}
+	if err := appendOp(tx, syncwire.EntityTodo, t.UID, syncwire.KindCreate, patch); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: 提交新建待办失败: %w", err)
+	}
+	return id, nil
 }
 
 // UpdateTodo 全量覆盖待办字段；created_at 保持原值，updated_at 刷新。
@@ -496,16 +600,35 @@ func (s *Store) UpdateTodo(t Todo) error {
 		return fmt.Errorf("store: 待办标题不能为空")
 	}
 	due := timeText(t.DueAt)
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: 开始事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	old, ok, err := selectTodo(tx, t.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
 		`UPDATE todo SET title = ?, note = ?, project_id = ?, repo_id = ?, priority = ?,
 		        important = ?, urgent = ?, status = ?, start_at = ?, due_at = ?, done_at = ?,
 		        notified_at = CASE WHEN due_at <> ? THEN '' ELSE notified_at END,
 		        updated_at = ?
 		  WHERE id = ?`,
 		t.Title, t.Note, t.ProjectID, t.RepoID, t.Priority, t.Important, t.Urgent,
-		t.Status, timeText(t.StartAt), due, timeText(t.DoneAt), due, nowText(), t.ID)
-	if err != nil {
+		t.Status, timeText(t.StartAt), due, timeText(t.DoneAt), due, nowText(), t.ID); err != nil {
 		return fmt.Errorf("store: 更新待办失败: %w", err)
+	}
+	if ok {
+		// 更新后重新读一遍再算差集：notified_at 的 CASE 表达式在 SQL 里发生，
+		// 只有读回来才知道真正落库的值。
+		if err := s.appendTodoDiff(tx, old, t.ID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交更新待办失败: %w", err)
 	}
 	return nil
 }
@@ -521,15 +644,33 @@ func (s *Store) SetTodoStatus(id int64, status string) error {
 	if strings.TrimSpace(status) == "" {
 		return fmt.Errorf("store: 待办状态不能为空")
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: 开始事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	old, ok, err := selectTodo(tx, id)
+	if err != nil {
+		return err
+	}
 	now := nowText()
 	doneAt := ""
 	if status == "已完成" {
 		doneAt = now
 	}
-	if _, err := s.db.Exec(
+	if _, err := tx.Exec(
 		`UPDATE todo SET status = ?, done_at = ?, updated_at = ? WHERE id = ?`,
 		status, doneAt, now, id); err != nil {
 		return fmt.Errorf("store: 更新待办状态失败: %w", err)
+	}
+	if ok {
+		if err := s.appendTodoDiff(tx, old, id); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交更新待办状态失败: %w", err)
 	}
 	return nil
 }
@@ -542,9 +683,30 @@ func (s *Store) MarkTodoNotified(id int64, at time.Time) error {
 	if id <= 0 {
 		return fmt.Errorf("store: 标记待办提醒缺少有效 id")
 	}
-	if _, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: 开始事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	old, ok, err := selectTodo(tx, id)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
 		`UPDATE todo SET notified_at = ? WHERE id = ?`, timeText(at), id); err != nil {
 		return fmt.Errorf("store: 标记待办提醒失败: %w", err)
+	}
+	if ok && timeText(old.NotifiedAt) != timeText(at) {
+		// 提醒状态也要同步：否则两台设备会各弹一次同一条待办的提醒。
+		// 只写 notified_at，不动 updated_at——这是系统状态，不是用户编辑。
+		if err := appendOp(tx, syncwire.EntityTodo, old.UID, syncwire.KindPatch,
+			map[string]any{"notified_at": timeText(at)}); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交待办提醒状态失败: %w", err)
 	}
 	return nil
 }
@@ -554,8 +716,27 @@ func (s *Store) DeleteTodo(id int64) error {
 	if id <= 0 {
 		return fmt.Errorf("store: 删除待办缺少有效 id")
 	}
-	if _, err := s.db.Exec(`DELETE FROM todo WHERE id = ?`, id); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: 开始事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var uid string
+	if err := tx.QueryRow(`SELECT uid FROM todo WHERE id = ?`, id).Scan(&uid); err != nil &&
+		err != sql.ErrNoRows {
+		return fmt.Errorf("store: 查询待办 uid 失败: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM todo WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: 删除待办失败: %w", err)
+	}
+	if uid != "" {
+		if err := appendOp(tx, syncwire.EntityTodo, uid, syncwire.KindDelete, nil); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交删除待办失败: %w", err)
 	}
 	return nil
 }

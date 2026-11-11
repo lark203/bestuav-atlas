@@ -137,6 +137,23 @@ type App struct {
 	// 帧循环不再推进，自动刷新必须靠独立计时器，而不是 View 里的 c.After。
 	repoAutoLoop sync.Once
 
+	// ---- 跨设备同步 ----
+	// syncBusy 为一轮同步正在进行（推或拉），用于避免重入与按钮连点。
+	syncBusy bool
+	// syncNextAt 下一次自动同步的时刻；零值表示还没排。
+	syncNextAt time.Time
+	// syncLoop 保证后台同步计时器只启动一次（理由同 repoAutoLoop）。
+	syncLoop sync.Once
+	// syncStatus 最近一次同步的展示文本（成功/失败原因），直接显示在设置页。
+	syncStatus string
+	// syncLastErr 上次失败原因，用于「同一条错误只提示一次」，不刷屏。
+	syncLastErr string
+	// syncCode 当前显示的配对码（8 位）与过期时刻；空 = 没有待用配对码。
+	syncCode       string
+	syncCodeExpire time.Time
+	// syncPairText 配对串（atlas://pair?server=…&code=…），方便整段复制。
+	syncPairText string
+
 	// 多实例开关（保存后需重启生效：单实例锁在进程启动时获取）。
 	allowMultiInstance bool
 	appliedMulti       bool
@@ -536,6 +553,8 @@ func (a *App) SetWindow(w *mygo.Window) {
 	// 自动刷新不能依赖 View 的帧循环：窗口收进托盘 / 最小化后不再有帧，
 	// c.After 排的唤醒也就不会来。这里起一个独立计时器，到点直接回主线程。
 	a.startRepoAutoLoop()
+	// 同步同理：托盘的机器也要能把手机上的改动拉回来。
+	a.startSyncLoop()
 }
 
 // showMainWindow 把主窗口调出来（便签 / 托盘入口用）：托盘里隐藏的先 Show，
@@ -935,6 +954,8 @@ func (a *App) View(c *ui.Context) {
 	a.checkTodoDue(c)
 	// 0.6) 仓库页自动刷新：到点用 batchAuto 异步刷新本地状态 + 远端信息。
 	a.checkRepoAutoRefresh(c)
+	// 0.7) 跨设备同步：到点把本地变更推上去、把别人的拉回来（见 sync_timer.go）。
+	a.checkSync(c)
 
 	// 1) 主题源：仅在变化时切换（SetSource 会触发整树重建，不可每帧调用）。
 	if a.themeIdx != a.appliedThemeIdx {

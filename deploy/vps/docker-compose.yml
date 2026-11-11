@@ -1,0 +1,34 @@
+# 单机部署（1Panel 机器）。
+#
+# 两种公网入口方案，端口绑定不同——**选错就是 502**：
+#   A. DNS 直连本机，由本机 openresty 反代：端口用 "127.0.0.1:17420:7420"（不外露）
+#   B. 另一台机器（如 .26）做统一入口：端口必须 "17420:7420"（监听所有网卡），
+#      否则对端连不上，报 502 Bad Gateway；安全组再把来源限制到对端 IP。
+#
+# 当前线上采用 B，见 README 第〇/四节。
+services:
+  atlas-sync:
+    build: .
+    image: bestuav/atlas-sync:0.11.0
+    container_name: atlas-sync
+    # 以宿主 uid 运行：./data 是 bind mount，属主是部署用户；
+    # 镜像里的 atlas(10001) 写不进去，会报 "unable to open database file (14)"。
+    # 部署前用 id -u / id -g 查，换成实际数字。
+    user: "1002:1002"
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ATLAS_SYNC_DB: /data/atlas-sync.db
+      ATLAS_SYNC_LISTEN: :7420
+    volumes:
+      - ./data:/data
+    ports:
+      # 方案 B（当前）：对另一台机器的 openresty 暴露，安全组限定来源 IP。
+      - "17420:7420"
+      # 方案 A：只给本机反代用，公网不可达（切换时注释掉上面一行、用这一行）。
+      # - "127.0.0.1:17420:7420"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

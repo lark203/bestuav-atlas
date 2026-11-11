@@ -12,6 +12,7 @@
 //   - app_event       应用事件/错误/崩溃（由 internal/logging 的 Recorder 写入）
 //   - page_pref       页面私有的键值状态（筛选条件、草稿、上次选中的一行…）
 //   - project / repo / todo  Atlas 的项目、代码仓库与待办，见 atlas.go
+//   - sync_op / sync_state   跨设备同步的变更日志与水位，见 sync.go
 //   - schema_meta     键值元数据（schema 版本、首次演示数据是否已灌入等）
 //
 // 不存什么：**用户偏好仍留在 settings.json**。单机单用户的键值配置用 JSON 文件是
@@ -44,7 +45,8 @@ import (
 // 8：待办新增计划开始日（start_at），支撑「今天要做」与桌面便签分时段视图
 // 9：新增 note（笔记：Markdown 正文 + 标签 + 置顶）
 // 10：笔记补充归属项目/仓库与编辑器类型（editor = markdown | rich）
-const schemaVersion = "10"
+// 11：跨设备同步——项目/待办增加 uid，新增 sync_op（变更日志）与 sync_state（水位）
+const schemaVersion = "11"
 
 // SchemaVersion 返回当前数据库结构版本（配置包 manifest 与导入校验用）。
 func SchemaVersion() string { return schemaVersion }
@@ -217,6 +219,7 @@ func (s *Store) migrate() error {
 		// 注意 "desc" 必须加双引号——DESC 是 SQLite 关键字，裸写会让建表语句语法错误。
 		`CREATE TABLE IF NOT EXISTS project (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			uid        TEXT NOT NULL DEFAULT '',
 			name       TEXT NOT NULL,
 			"desc"     TEXT NOT NULL DEFAULT '',
 			status     TEXT NOT NULL DEFAULT '进行中',
@@ -250,6 +253,7 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_repo_project ON repo(project_id)`,
 		`CREATE TABLE IF NOT EXISTS todo (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			uid        TEXT NOT NULL DEFAULT '',
 			title      TEXT NOT NULL,
 			note       TEXT NOT NULL DEFAULT '',
 			project_id INTEGER NOT NULL DEFAULT 0,
@@ -265,6 +269,23 @@ func (s *Store) migrate() error {
 			updated_at  TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_todo_status ON todo(status, due_at)`,
+		// 变更日志：sent_at 为空 = 还没推送（outbox）。
+		// rowid 即插入顺序，PendingOps 靠它还原用户的编辑先后。
+		`CREATE TABLE IF NOT EXISTS sync_op (
+			op_id      TEXT PRIMARY KEY,
+			entity     TEXT NOT NULL,
+			uid        TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			payload    TEXT NOT NULL DEFAULT '{}',
+			sent_at    TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sync_op_pending ON sync_op(sent_at) WHERE sent_at = ''`,
+		`CREATE INDEX IF NOT EXISTS idx_sync_op_uid ON sync_op(uid)`,
+		`CREATE TABLE IF NOT EXISTS sync_state (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.Exec(q); err != nil {
@@ -278,6 +299,22 @@ func (s *Store) migrate() error {
 	// 下次启动就会以为已经迁移完，而表里其实还没有新列。
 	if err := s.addMissingColumns(); err != nil {
 		return err
+	}
+	// 老数据的同步身份：必须在补列之后、写版本号之前回填。
+	// 顺序反了（先写版本号）会让下次启动以为迁移已完成，历史行永远没有 uid。
+	if err := s.backfillUIDs(); err != nil {
+		return err
+	}
+	// uid 的唯一索引只能等补列与回填之后建：老库在这之前根本没有 uid 这一列。
+	// 用「部分索引」而不是 UNIQUE(uid)：老库回填前会有多行 uid = ''，
+	// 普通唯一索引在建索引那一刻就会失败。
+	for _, q := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_project_uid ON project(uid) WHERE uid <> ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_todo_uid ON todo(uid) WHERE uid <> ''`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			return fmt.Errorf("store: 建立同步身份索引失败: %w", err)
+		}
 	}
 	// 记录版本：首次写入；已有时只在**新版本更高**时更新。
 	//
@@ -327,6 +364,10 @@ func (s *Store) addMissingColumns() error {
 			{"urgent", `urgent INTEGER NOT NULL DEFAULT 0`},
 			{"notified_at", `notified_at TEXT NOT NULL DEFAULT ''`},
 			{"start_at", `start_at TEXT NOT NULL DEFAULT ''`},
+			{"uid", `uid TEXT NOT NULL DEFAULT ''`},
+		}},
+		{"project", []addColumn{
+			{"uid", `uid TEXT NOT NULL DEFAULT ''`},
 		}},
 		{"task", []addColumn{
 			{"detail", `detail TEXT NOT NULL DEFAULT ''`},

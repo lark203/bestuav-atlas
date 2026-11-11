@@ -1,0 +1,24 @@
+# atlas-sync 的对外入口：自动申请并续期证书，只反代 /v1/*。
+#
+# 域名从 compose 的环境变量来（SYNC_DOMAIN），换机器只改 .env。
+{$SYNC_DOMAIN} {
+	encode zstd gzip
+
+	# 同步请求都是小 JSON：限一下体积，别让错误客户端把内存打满。
+	request_body {
+		max_size 4MB
+	}
+
+	# 说明：限流在服务端自己做（/v1/pair 按 IP 每分钟 10 次），这里不再加一层。
+	# 想在这里也挡一道的话，需要带 caddy-ratelimit 插件的镜像（xcaddy 构建），
+	# 官方 caddy:2 不带该指令，写上去会直接启动失败。
+
+	# 只暴露协议路径，其余一律 404——这台机器上不跑别的东西。
+	@api path /v1/*
+	handle @api {
+		reverse_proxy atlas-sync:7420
+	}
+	handle {
+		respond "atlas-sync" 404
+	}
+}
