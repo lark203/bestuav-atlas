@@ -111,7 +111,7 @@ func TestScreenshots(t *testing.T) {
 	}
 	a.reloadAtlas()
 
-	for _, page := range []string{"home", "todos", "projects", "repos", "task", "settings"} {
+	for _, page := range []string{"home", "todos", "projects", "repos", "task", "settings", "sync-deploy"} {
 		a.page = page
 		save("atlas-" + page)
 	}

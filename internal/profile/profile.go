@@ -71,6 +71,8 @@ var machineKeys = []string{
 	"githubToken", "giteeToken", "atomGitToken", "giteaHost", "giteaToken",
 	// 跨设备同步的地址与两组令牌同理：换台机器要重新连，令牌更不能随包走。
 	"syncEnabled", "syncURL", "syncDeviceID", "syncToken", "syncAdminToken", "syncLastAt",
+	// 部署目标（SSH 主机/用户/私钥路径/远端目录）同样是本机信息。
+	"deployHost", "deployPort", "deployUser", "deployKey", "deployDir", "deploySrc",
 }
 
 // preservedKeys 导入时保留「本机当前值」的设备相关字段：包里的这些键已被剔除，
@@ -82,6 +84,7 @@ var preservedKeys = []string{
 	"repoBranch", "repoPath", "repoLast",
 	"githubToken", "giteeToken", "atomGitToken", "giteaHost", "giteaToken",
 	"syncEnabled", "syncURL", "syncDeviceID", "syncToken", "syncAdminToken", "syncLastAt",
+	"deployHost", "deployPort", "deployUser", "deployKey", "deployDir", "deploySrc",
 }
 
 // ExportOptions 导出参数。

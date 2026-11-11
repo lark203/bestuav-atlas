@@ -154,6 +154,12 @@ type App struct {
 	// syncPairText 配对串（atlas://pair?server=…&code=…），方便整段复制。
 	syncPairText string
 
+	// ---- 同步服务部署（工具 → 同步服务） ----
+	// deployBusy 部署流程（构建/上传/重建）进行中，避免重复点击。
+	deployBusy bool
+	// deployLines 部署输出，按行追加，页面直接渲染；只保留最近 deployMaxLines 行。
+	deployLines []string
+
 	// 多实例开关（保存后需重启生效：单实例锁在进程启动时获取）。
 	allowMultiInstance bool
 	appliedMulti       bool

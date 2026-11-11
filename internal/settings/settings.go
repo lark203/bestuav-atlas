@@ -117,6 +117,16 @@ type Settings struct {
 	// SyncLastAt 上次同步完成的本地时间（展示文本，不参与逻辑）。
 	SyncLastAt string `json:"syncLastAt"`
 
+	// ---- 同步服务部署（工具 → 同步服务） ----
+	// 这几项只用于「从桌面端把 atlas-sync 发到服务器上」，都只属于本机。
+	// 以前靠 deploy/vps 里的脚本 + 手抄参数，换台机器就得重来一遍。
+	DeployHost string `json:"deployHost"` // SSH 主机
+	DeployPort int    `json:"deployPort"` // SSH 端口，0 → 22
+	DeployUser string `json:"deployUser"` // SSH 用户
+	DeployKey  string `json:"deployKey"`  // 私钥路径（支持 ~）
+	DeployDir  string `json:"deployDir"`  // 远端目录，如 ~/atlas-sync
+	DeploySrc  string `json:"deploySrc"`  // 本机源码目录（含 cmd/atlas-sync）
+
 	// ---- 伴生桌宠 ----
 	// PetEnabled 是否显示桌宠（无边框透明置顶小窗，见 internal/view/pet.go）。
 	PetEnabled bool `json:"petEnabled"`

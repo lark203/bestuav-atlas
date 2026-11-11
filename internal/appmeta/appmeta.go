@@ -17,7 +17,10 @@
 //   - 本包只放纯字符串/常量，不依赖任何 UI 或业务包，避免循环依赖。
 package appmeta
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+	"strings"
+)
 
 // Name 产品名 / 配置目录名（per-user 配置路径形如 ~/.config/bestuav-atlas）。
 // 同时用作窗口状态键（记住窗口大小与位置）。
@@ -28,6 +31,23 @@ const Title = "星图"
 
 // Identifier 应用唯一标识符，用于单实例锁、打包标识符等。
 const Identifier = "com.bestuav.atlas"
+
+// Version 只返回模块版本（不含提交号），用于要「干净版本串」的地方：
+// atlas-sync 的 -X main.version、Docker 镜像标签。
+//
+// 与 BuildVersion 的区别：后者给人看（带短提交号），这个给机器用
+// （镜像标签里有空格/点号会很难读）。
+func Version() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	v := bi.Main.Version
+	if v == "" || v == "(devel)" {
+		return "dev"
+	}
+	return strings.TrimPrefix(v, "v")
+}
 
 // BuildVersion 返回构建版本文本：模块版本 + 短提交号；本地 go run / go build 时通常是 "dev"。
 //

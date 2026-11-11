@@ -146,6 +146,10 @@ func navRegistry() []navGroup {
 					{icon: icons.Refresh, label: "重置表单", tip: "清空当前表单"},
 					{icon: icons.Copy, label: "复制结果", tip: "复制最近一次生成的 license"},
 				}},
+			// 同步服务：把 atlas-sync 构建并发到自己的服务器上（部署/重启/日志/健康检查）。
+			// 用缓存：输出记录要能在切走再切回来后还看得到。
+			{id: "sync-deploy", label: "同步服务", icon: icons.Package,
+				build: (*App).syncDeployPage, policy: pagePolicy{keep: keepCached}},
 		}},
 	}
 }
