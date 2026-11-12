@@ -72,6 +72,30 @@ func (a *App) syncSection(c *ui.Context, t *ui.Theme) {
 		})
 
 		if connected {
+			// 定时同步开关：关掉后连接与令牌都留着，只是不再每 30 秒自动跑一轮。
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				on := !a.settings.SyncAutoOff
+				ui.Switch(c, &on).Shrink(0)
+				if on != !a.settings.SyncAutoOff {
+					a.settings.SyncAutoOff = !on
+					// 重新打开时立刻排一轮，不用等满 30 秒。
+					a.syncNextAt = time.Time{}
+					a.persist()
+					if on {
+						a.toast("已开启定时同步")
+					} else {
+						a.toast("已关闭定时同步，需要时点「立即同步」")
+					}
+				}
+				ui.Column(c).Gap(2).Grow(1).Children(func() {
+					ui.Text(c, "定时同步").Bold()
+					ui.Text(c, "每 30 秒自动推拉一次；关掉后只在你点「立即同步」时同步。").
+						TextColor(t.TextMuted).FontSize(t.FontSize - 2)
+				})
+			})
+		}
+
+		if connected {
 			ui.Text(c, "跨设备只认 uid：同一件事在第两台机器上是同一条待办，不会变成两条。"+
 				"手机端在「今日」页勾完成，这里 30 秒内能看到。").
 				TextColor(t.TextMuted).FontSize(t.FontSize - 2)

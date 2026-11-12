@@ -50,6 +50,11 @@ func (a *App) tickSync() time.Duration {
 		a.syncNextAt = time.Time{}
 		return 0
 	}
+	// 关掉定时同步：不排下一轮，也不跑（手动「立即同步」走 syncNow，不受这里影响）。
+	if a.settings.SyncAutoOff {
+		a.syncNextAt = time.Time{}
+		return 0
+	}
 	now := time.Now()
 	if a.syncNextAt.IsZero() {
 		// 刚启动 / 刚连上：先跑一轮，不让用户等满 30 秒。

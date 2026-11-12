@@ -116,6 +116,12 @@ type Settings struct {
 	SyncAdminToken string `json:"syncAdminToken"`
 	// SyncLastAt 上次同步完成的本地时间（展示文本，不参与逻辑）。
 	SyncLastAt string `json:"syncLastAt"`
+	// SyncAutoOff 关掉「定时同步」：连接与令牌都保留，只是不再每 30 秒自动跑一轮，
+	// 需要时手动点「立即同步」。
+	//
+	// 用「反向命名」是为了老配置的零值语义：字段不存在时 false = 自动同步开启，
+	// 不会因为升级突然把所有人的定时同步关掉。
+	SyncAutoOff bool `json:"syncAutoOff"`
 
 	// ---- 同步服务部署（工具 → 同步服务） ----
 	// 这几项只用于「从桌面端把 atlas-sync 发到服务器上」，都只属于本机。
