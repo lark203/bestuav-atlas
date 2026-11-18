@@ -181,6 +181,11 @@ type App struct {
 	taskRunning  bool
 	taskProgress float64 // 0..1；负值表示“不确定进度”（无限循环动画）
 	taskLabel    string  // 当前任务名（显示在页头标题右侧）
+	// 轻量任务的「同参数点击去抖」：本地刷新几十毫秒就结束，
+	// 光靠 taskRunning 拦不住连点——第二次点击落在上一轮结束之后，
+	// 会再起一轮，任务队列里就出现多条重复记录。
+	lastBatchSig string
+	lastBatchAt  time.Time
 
 	// ---- 重量级任务（全局遮罩）----
 	// heavyRunning 为 true 时，整个窗口罩上一层不可关闭的遮罩并拦截所有操作。

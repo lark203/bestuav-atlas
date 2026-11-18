@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +130,38 @@ func (ts tokenSet) client(p forge.Platform) *forge.Client {
 	return forge.New(p, ts.tokenFor(p.Host))
 }
 
+// batchClickDebounce 同一批操作的连点去抖窗口。
+//
+// 为什么不只靠 taskRunning：本地「刷新状态」对几十个仓库也只要几十毫秒，
+// 用户连点两下时第一轮已经结束，taskRunning 已经复位，第二轮照样会启动。
+// 800ms 足够覆盖双击/三击，又不影响「过几秒再刷一次」的正常使用。
+const batchClickDebounce = 800 * time.Millisecond
+
+// sameBatchRequest 判断这次点击是否与上一次同参数请求落在去抖窗口内。
+func sameBatchRequest(prevSig string, prevAt time.Time, sig string, now time.Time) bool {
+	if prevSig == "" || prevSig != sig {
+		return false
+	}
+	return now.Sub(prevAt) < batchClickDebounce
+}
+
+// batchSignature 生成「动作 + 仓库集合」的签名：仓库顺序不影响签名，
+// 所以「全选刷新」与「先选 A 再选 B 刷新」只要集合相同就算同一次请求。
+func batchSignature(kind batchKind, ids []int64) string {
+	sorted := append([]int64(nil), ids...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	var b strings.Builder
+	b.WriteString(kind.label())
+	b.WriteByte('|')
+	for i, id := range sorted {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatInt(id, 10))
+	}
+	return b.String()
+}
+
 // runRepoBatch 用「有限并发的工作池」处理一批仓库。
 //
 // 并发数来自设置里的「异步任务 → 最大并发」（默认 4，1–8 可调）。做法是
@@ -151,6 +185,16 @@ func (a *App) runRepoBatch(kind batchKind, ids []int64, commitMsg string) {
 		a.toast("先选中要处理的仓库")
 		return
 	}
+
+	// 连点去抖：同一动作 + 同一批仓库在 800ms 内只认第一下。
+	// 放在 taskRunning 之后、真正启动之前，避免误吞「隔一会儿再点一次」。
+	sig := batchSignature(kind, ids)
+	now := time.Now()
+	if sameBatchRequest(a.lastBatchSig, a.lastBatchAt, sig, now) {
+		logging.Info("atlas", "忽略重复点击", "kind", kind.label(), "repos", len(repos))
+		return
+	}
+	a.lastBatchSig, a.lastBatchAt = sig, now
 	// 令牌快照：只有「刷新远端信息」的 API 那一步用得上；没有令牌也能跑——
 	// 本地 fetch 不需要令牌，状态照样会更新，只是少了平台元信息。
 	tokens := a.tokensSnapshot()

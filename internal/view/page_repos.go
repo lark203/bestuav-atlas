@@ -76,14 +76,17 @@ func (a *App) repoPage(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "把本地仓库与远端状态摊在一张表里").FontSize(t.FontSize - 2).TextColor(t.TextMuted)
 			})
 			ui.Row(c).Gap(8).Shrink(0).Children(func() {
-				if ui.Button(c, "刷新状态").
-					Tooltip("只读本地 git（不联网）：确认哪些仓库有未提交改动").
-					Clicked() {
+				inspectBtn := ui.Button(c, "刷新状态").
+					Tooltip("只读本地 git（不联网）：确认哪些仓库有未提交改动")
+				// 轻量任务执行期间禁用：按钮视觉上就能看出「正在跑，别再点」。
+				inspectBtn.Disabled(a.taskRunning)
+				if inspectBtn.Clicked() && !a.taskRunning {
 					a.runRepoBatch(batchInspect, a.allRepoIDs(), "")
 				}
-				if ui.Button(c, "刷新远端信息").
-					Tooltip("先 git fetch（只更新远端引用，不动工作区），再按真实远端重算状态，并读平台信息").
-					Clicked() {
+				remoteBtn := ui.Button(c, "刷新远端信息").
+					Tooltip("先 git fetch（只更新远端引用，不动工作区），再按真实远端重算状态，并读平台信息")
+				remoteBtn.Disabled(a.taskRunning)
+				if remoteBtn.Clicked() && !a.taskRunning {
 					a.runRepoBatch(batchRemote, a.selectionOrAll(), "")
 				}
 				if ui.PrimaryButton(c, "导入仓库").Clicked() {
